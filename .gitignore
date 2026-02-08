@@ -1,0 +1,19 @@
+# Artefatti di compilazione
+/bin/
+*.o
+*.out
+
+# Artefatti di compilazione specifici del sottomodulo cmocka
+lib/cmocka/src/*.o
+# NOTA: La directory lib/cmocka stessa è un sottomodulo e NON dovrebbe essere ignorata.
+# Vengono ignorati solo i suoi artefatti di build o i file temporanei.
+
+# File specifici di macOS
+.DS_Store
+
+# File temporanei di editor e di sistema
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
