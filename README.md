@@ -4,6 +4,8 @@ Questo è un semplice server TCP scritto in C, progettato come un clone basilare
 
 ## Caratteristiche Principali
 
+*   **Protocollo Binario Personalizzato:** Implementa un protocollo di comunicazione binario customizzato per l'interazione client-server, più efficiente dei protocolli testuali per alcuni scopi.
+*   **Mitigazioni DOS:** Include meccanismi per prevenire Denial of Service attraverso la validazione dei limiti del protocollo e l'implementazione di timeout per le connessioni inattive.
 *   **Architettura Non Bloccante:** Utilizza I/O non bloccante per gestire più client simultaneamente su un singolo thread.
 *   **Multiplexing con `poll()`:** Usa la chiamata di sistema `poll()` per monitorare in modo efficiente più socket (sia di ascolto che dei client).
 *   **Gestione dei Buffer:** Implementa una gestione manuale dei buffer di lettura e scrittura per gestire i messaggi in streaming.
@@ -79,15 +81,32 @@ Il progetto usa CMocka per i test unitari.
 
 ```
 .
-├── bin/              # Eseguibili compilati (ignorato da git)
-├── include/          # File di intestazione (attualmente vuoto)
+├── bin/              # Eseguibili compilati (main server, run_tests)
 ├── lib/              # Librerie di terze parti (CMocka)
 ├── src/
 │   └── main.c        # Codice sorgente principale del server
+│   └── server.c      # Implementazione del server TCP e event loop
+│   └── protocol.c    # Logica di parsing del protocollo
+│   └── protocol.h    # Definizioni del protocollo e della struttura Conn
 ├── tests/
-│   └── main_test.c   # Unit test per il server
-├── client.py         # Semplice client Python per testare il server
+│   └── main_test.c   # Unit test per la logica del protocollo
+├── client.py         # Semplice client Python per testare il server (implementa il protocollo)
 ├── Makefile          # Regole per la compilazione e l'esecuzione
 ├── .gitignore        # File e directory da ignorare con git
-└── README.md         # Questo file
+├── README.md         # Questo file
+└── GEMINI.md         # File di contesto per l'agente Gemini CLI
 ```
+
+## Contesto per Gemini CLI (`GEMINI.md`)
+
+Il file `GEMINI.md` contiene una panoramica dettagliata del progetto, la sua architettura e i componenti principali, generata dall'agente Gemini CLI. Questo file viene utilizzato dall'agente per mantenere il contesto attraverso le sessioni, fornendo una base di conoscenza immediata per successive interazioni e compiti. Sebbene sia principalmente per uso dell'agente, può servire anche come documentazione di alto livello per gli sviluppatori.
+
+## Limitazioni Attuali e Lavoro Futuro
+
+Questo progetto è un clone rudimentale di Redis e, come tale, presenta diverse limitazioni e aree di sviluppo futuro:
+
+*   **Nessuna Implementazione di Key-Value Store:** Attualmente, il server si limita a parsare i comandi e rispondere con un generico "OK". Non esiste una logica per immagazzinare o recuperare dati (`SET`, `GET` non hanno effetti reali). L'aggiunta di una struttura dati (es. hash table) per lo store è il prossimo passo fondamentale.
+*   **Set di Comandi Limitato:** Il server gestisce il parsing per comandi arbitrari, ma non interpreta né esegue comandi specifici di Redis (es. `SET`, `GET`, `PING`, ecc.).
+*   **Gestione Errori Protocollo:** Sebbene siano state implementate mitigazioni DoS e la gestione degli errori di protocollo sia più robusta, le risposte di errore ai client sono ancora generiche ("-ERR ..."). Una gestione più dettagliata e specifica degli errori sarebbe desiderabile.
+*   **Scalabilità e Robustezza:** Per un utilizzo in produzione, sarebbero necessarie ulteriori ottimizzazioni per la scalabilità (es. thread pool, epoll/kqueue) e una gestione degli errori più granulare (es. non abortire per errori non critici).
+*   **Mancanza di Persistenza:** Il server non salva i dati su disco, quindi tutti i dati vengono persi al riavvio.
