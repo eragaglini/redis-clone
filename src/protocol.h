@@ -23,7 +23,7 @@ typedef enum {
 // La struttura dati che rappresenta lo stato di una singola connessione client.
 typedef struct {
     int fd;
-    
+
     // Buffer di lettura
     size_t rbuf_size;
     uint8_t rbuf[4 + K_MAX_MSG];
@@ -38,7 +38,7 @@ typedef struct {
     uint32_t total_args_expected; // Il numero totale di argomenti per il comando corrente.
     uint32_t current_arg_idx;     // L'indice dell'argomento che stiamo leggendo/salvando ora.
     uint32_t arg_len;             // La lunghezza dell'argomento che stiamo leggendo ora.
-    char **cmd_argv;              // L'array di stringhe (es. {"SET", "key", "value"})
+    char** cmd_argv;              // L'array di stringhe (es. {"SET", "key", "value"})
 
     // Flag di errore per la connessione. Se settato, la connessione deve essere chiusa.
     int error;
@@ -49,6 +49,6 @@ typedef struct {
 } Conn;
 
 // Funzione "pura" per il parsing del buffer e la preparazione della risposta.
-void consume_buffer(Conn *c);
+void consume_buffer(Conn* c);
 
 #endif // PROTOCOL_H

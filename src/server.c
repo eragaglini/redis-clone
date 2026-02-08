@@ -50,11 +50,11 @@
 // In un server di produzione, si userebbe una hash map (`std::map` in C++, o implementazioni
 // C come `uthash`) o un array dinamico e compattato (gestendo un mapping interno).
 // static Conn *fd2conn[MAX_CONN] = {0}; // rimosso a favore di 'connections'
-static Conn *connections[MAX_CONN] = {0}; // Mappa l'indice dell'array poll_args alla struct Conn.
+static Conn* connections[MAX_CONN] = { 0 }; // Mappa l'indice dell'array poll_args alla struct Conn.
 
 // `poll_args`: L'array di `struct pollfd` che viene passato alla funzione di sistema `poll()`.
 // `poll()` monitora gli eventi su ciascun file descriptor listato in questo array.
-static struct pollfd poll_args[MAX_CONN] = {0}; // Inizializzato a zero.
+static struct pollfd poll_args[MAX_CONN] = { 0 }; // Inizializzato a zero.
 
 
 // =====================================================================================
@@ -63,7 +63,7 @@ static struct pollfd poll_args[MAX_CONN] = {0}; // Inizializzato a zero.
 
 // Stampa un messaggio informativo o di errore sullo standard error (`stderr`).
 // `stderr` è un canale separato da `stdout`, usato tipicamente per i messaggi di log.
-static void msg(const char *msg_text) {
+static void msg(const char* msg_text) {
     fprintf(stderr, "%s\n", msg_text);
 }
 
@@ -71,7 +71,7 @@ static void msg(const char *msg_text) {
 // di sistema corrente (`errno`), poi termina brutalmente il programma con `abort()`.
 // `abort()` è preferibile a `exit()` in caso di errori gravi, poiché genera
 // un core dump (su sistemi Unix-like) utile per il debugging e l'analisi post-mortem.
-static void die(const char *msg_text) {
+static void die(const char* msg_text) {
     int err = errno; // Salviamo `errno` perché le chiamate seguenti potrebbero modificarlo.
     fprintf(stderr, "[%d] %s\n", err, msg_text);
     abort();
@@ -103,7 +103,7 @@ static uint64_t get_monotonic_time_ms() {
 // event loop di continuare a girare e servire altri client.
 static void fd_set_nb(int fd) {
     errno = 0; // Azzera `errno` prima della chiamata di sistema `fcntl()`.
-    
+
     // 1. `fcntl(fd, F_GETFL, 0)`: Legge i flag di stato attuali del file descriptor `fd`.
     //    `F_GETFL` è un comando per `fcntl` che recupera i flag di accesso e di stato del file.
     //    È importante leggere i flag esistenti per non sovrascrivere altre impostazioni importanti.
@@ -131,7 +131,7 @@ static void fd_set_nb(int fd) {
 // Questa funzione è cruciale per prevenire memory leak e per gestire
 // la disconnessione dei client in modo pulito.
 static void conn_close(int pfd_idx) { // Ora accetta l'indice dell'array poll_args.
-    Conn *c = connections[pfd_idx];
+    Conn* c = connections[pfd_idx];
     if (!c) { // Controllo di sicurezza, non dovrebbe mai accadere.
         return;
     }
@@ -142,9 +142,9 @@ static void conn_close(int pfd_idx) { // Ora accetta l'indice dell'array poll_ar
     poll_args[pfd_idx].fd = -1; // Invalida lo slot, indicando che è libero.
     poll_args[pfd_idx].events = 0; // Azzera gli eventi.
     poll_args[pfd_idx].revents = 0; // Azzera i revents.
-    
+
     // Libera la memoria allocata per la struct Conn.
-    free(c); 
+    free(c);
 }
 
 // =====================================================================================
@@ -153,7 +153,7 @@ static void conn_close(int pfd_idx) { // Ora accetta l'indice dell'array poll_ar
 
 // Inizializza una `struct pollfd` per una data connessione `Conn` e la aggiunge all'array `poll_args`.
 // Questa funzione viene usata per dire a `poll()` quali eventi ci interessano per un dato socket.
-static void conn_put(struct pollfd *pfd, Conn *c) {
+static void conn_put(struct pollfd* pfd, Conn* c) {
     pfd->fd = c->fd; // Il file descriptor del socket client da monitorare.
     // `events`: Specifica i tipi di eventi per cui vogliamo essere notificati.
     // `POLLIN`: Indica che vogliamo essere avvisati quando ci sono dati da leggere sul socket.
@@ -161,7 +161,7 @@ static void conn_put(struct pollfd *pfd, Conn *c) {
     //             senza bloccarsi (es. il buffer di invio del kernel ha spazio disponibile).
     pfd->events = POLLIN | POLLOUT;
     pfd->revents = 0; // `revents` è un campo di output che viene riempito da `poll()` con gli eventi
-                      // effettivamente verificatisi. Lo azzeriamo prima di ogni chiamata a `poll()`.
+    // effettivamente verificatisi. Lo azzeriamo prima di ogni chiamata a `poll()`.
 }
 
 // Gestisce l'accettazione di nuove connessioni in arrivo sul socket di ascolto.
@@ -170,7 +170,7 @@ static void handle_new_connection(int listen_fd) {
     while (1) {
         struct sockaddr_in client_addr = {};
         socklen_t socklen = sizeof(client_addr);
-        int connfd = accept(listen_fd, (struct sockaddr *)&client_addr, &socklen);
+        int connfd = accept(listen_fd, (struct sockaddr*)&client_addr, &socklen);
         if (connfd < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return;
@@ -195,21 +195,21 @@ static void handle_new_connection(int listen_fd) {
         }
 
         fd_set_nb(connfd); // Imposta il nuovo client socket a non bloccante.
-        
-        Conn *c = (Conn*)malloc(sizeof(Conn)); // Alloca dinamicamente memoria per la `Conn` struct.
+
+        Conn* c = (Conn*)malloc(sizeof(Conn)); // Alloca dinamicamente memoria per la `Conn` struct.
         if (!c) { // Gestione del fallimento di `malloc` (memoria esaurita).
             close(connfd);
             fprintf(stderr, "malloc fallito per Conn struct per FD %d. Connessione chiusa.\n", connfd);
             continue; // Continua il loop.
         }
-        
+
         // Inizializzazione pulita della nuova struct Conn.
         c->fd = connfd;
         c->rbuf_size = 0; c->wbuf_size = 0; c->wbuf_sent = 0;
         c->parse_state = STATE_PARSE_INIT; c->total_args_expected = 0; c->current_arg_idx = 0;
         c->arg_len = 0; c->cmd_argv = NULL; c->error = 0;
         c->last_activity_time = get_monotonic_time_ms();
-        
+
         connections[j] = c; // Mappa la `Conn` struct allo slot `j`.
         conn_put(&poll_args[j], c); // Inizializza lo slot `pollfd` per il client.
 
@@ -223,7 +223,7 @@ static void handle_new_connection(int listen_fd) {
 // leggere, far processare la logica, e scrivere.
 static void handle_client_io(int pfd_idx) {
     int connfd = poll_args[pfd_idx].fd; // Il file descriptor del client per cui si è verificato un evento.
-    Conn *c = connections[pfd_idx]; // Recupera lo stato (`Conn` struct) di questa connessione.
+    Conn* c = connections[pfd_idx]; // Recupera lo stato (`Conn` struct) di questa connessione.
     if (!c) return; // Controllo di sicurezza: la connessione potrebbe essere stata chiusa altrove.
 
     // --- FASE DI LETTURA ---
@@ -233,69 +233,72 @@ static void handle_client_io(int pfd_idx) {
         // questa chiamata ritornerà immediatamente.
                     // I dati vengono accodati al buffer di lettura (`c->rbuf`), a partire da `c->rbuf_size`.
                     // `sizeof(c->rbuf) - c->rbuf_size` è lo spazio disponibile nel buffer.
-                    ssize_t n_read = read(c->fd, &c->rbuf[c->rbuf_size], sizeof(c->rbuf) - c->rbuf_size);
-                    if (n_read > 0) { // Se `read()` ha letto uno o più byte.
-                        c->rbuf_size += (size_t)n_read; // Aggiorna la dimensione totale dei dati validi nel buffer.
-                        printf("Ricevuti %zd bytes dal FD %d\n", n_read, connfd);
-                        c->last_activity_time = get_monotonic_time_ms(); // Aggiorna l'orario di ultima attività.
-                        
-                        // Passa il controllo alla funzione `consume_buffer` (definita in `protocol.c`).
-                        // Questa funzione si occupa della "logica pura" di parsing dei messaggi e
-                        // di generazione delle risposte, operando solo sui buffer della `Conn` struct.
-                        consume_buffer(c);
-                    }
-                    
-                    // Gestione della disconnessione o errori di lettura.
-                    // `read()` ritorna 0 se il client ha chiuso la connessione (End Of File - EOF).
-                    // `read()` ritorna < 0 in caso di errore.
-                    if (n_read <= 0 || c->error) { // Aggiungiamo il controllo c->error per errori di protocollo
-                        // `n_read < 0` e `errno` è `EAGAIN` o `EWOULDBLOCK`:
-                        // Questo indica che non ci sono dati disponibili *al momento* per leggere.
-                        // Non è un errore, ma il normale comportamento di un socket non bloccante.
-                        if (n_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && !c->error) {
-                            // Il server deve solo riprovare a leggere più tardi, quando `poll()` segnalerà `POLLIN` di nuovo.
-                        } else {
-                            // Qui gestiamo la chiusura della connessione (sia per `n_read == 0` che per errori gravi).
-                            conn_close(pfd_idx); // Usa la funzione centralizzata di chiusura.
-                            return;       // La connessione non esiste più, quindi usciamo da questa funzione.
-                        }
-                    }
-                }
-        
-                // --- FASE DI SCRITTURA ---
-                // Controlla se l'evento `POLLOUT` (il socket è pronto per scrivere) si è verificato
-                // E se ci sono effettivamente dati da inviare nel buffer di scrittura (`c->wbuf`).
-                if (poll_args[pfd_idx].revents & POLLOUT) {
-                    if (c->wbuf_size > c->wbuf_sent) { // Ci sono dati nel buffer di scrittura (`c->wbuf`) da inviare?
-                        // `write()` tenta di inviare i dati. Poiché il socket è non bloccante,
-                        // `write()` potrebbe non inviare tutti i byte in una sola chiamata (write parziale).
-                        ssize_t n_written = write(connfd, &c->wbuf[c->wbuf_sent], c->wbuf_size - c->wbuf_sent);
-                        
-                        if (n_written > 0) { // Se `write()` ha inviato uno o più byte.
-                            c->wbuf_sent += n_written; // Aggiorna il contatore dei byte inviati con successo.
-                            c->last_activity_time = get_monotonic_time_ms(); // Aggiorna l'orario di ultima attività.
-                        }
-                        
-                        // Se tutti i dati nel buffer di scrittura (`c->wbuf`) sono stati inviati.
-                        if (c->wbuf_sent == c->wbuf_size) {
-                            c->wbuf_size = 0;   // Resetta la dimensione del buffer di scrittura, è ora vuoto.
-                            c->wbuf_sent = 0; // Resetta il contatore dei byte inviati.
-                            // CONSIDERAZIONE: In un server più avanzato, potremmo voler disattivare il monitoraggio
-                            // di `POLLOUT` in `poll_args[i].events` quando `wbuf` è vuoto per ridurre il carico
-                            // su `poll()` e riattivarlo solo quando ci sono nuovi dati da inviare.
-                        }
-                        
-                        // Gestione errori di scrittura.
-                        if (n_written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                            // Il buffer di invio del kernel è pieno. Non è un errore, ma un'indicazione
-                            // che `write()` non può accettare altri dati al momento.
-                            // `poll()` ci notificherà di nuovo con `POLLOUT` quando sarà pronto.
-                        } else if (n_written < 0) {
-                             // Errore reale di scrittura, trattato come disconnessione del client.
-                             conn_close(pfd_idx); // Usa la funzione centralizzata di chiusura.
-                        }
-                    }
-                }}
+        ssize_t n_read = read(c->fd, &c->rbuf[c->rbuf_size], sizeof(c->rbuf) - c->rbuf_size);
+        if (n_read > 0) { // Se `read()` ha letto uno o più byte.
+            c->rbuf_size += (size_t)n_read; // Aggiorna la dimensione totale dei dati validi nel buffer.
+            printf("Ricevuti %zd bytes dal FD %d\n", n_read, connfd);
+            c->last_activity_time = get_monotonic_time_ms(); // Aggiorna l'orario di ultima attività.
+
+            // Passa il controllo alla funzione `consume_buffer` (definita in `protocol.c`).
+            // Questa funzione si occupa della "logica pura" di parsing dei messaggi e
+            // di generazione delle risposte, operando solo sui buffer della `Conn` struct.
+            consume_buffer(c);
+        }
+
+        // Gestione della disconnessione o errori di lettura.
+        // `read()` ritorna 0 se il client ha chiuso la connessione (End Of File - EOF).
+        // `read()` ritorna < 0 in caso di errore.
+        if (n_read <= 0 || c->error) { // Aggiungiamo il controllo c->error per errori di protocollo
+            // `n_read < 0` e `errno` è `EAGAIN` o `EWOULDBLOCK`:
+            // Questo indica che non ci sono dati disponibili *al momento* per leggere.
+            // Non è un errore, ma il normale comportamento di un socket non bloccante.
+            if (n_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && !c->error) {
+                // Il server deve solo riprovare a leggere più tardi, quando `poll()` segnalerà `POLLIN` di nuovo.
+            }
+            else {
+                // Qui gestiamo la chiusura della connessione (sia per `n_read == 0` che per errori gravi).
+                conn_close(pfd_idx); // Usa la funzione centralizzata di chiusura.
+                return;       // La connessione non esiste più, quindi usciamo da questa funzione.
+            }
+        }
+    }
+
+    // --- FASE DI SCRITTURA ---
+    // Controlla se l'evento `POLLOUT` (il socket è pronto per scrivere) si è verificato
+    // E se ci sono effettivamente dati da inviare nel buffer di scrittura (`c->wbuf`).
+    if (poll_args[pfd_idx].revents & POLLOUT) {
+        if (c->wbuf_size > c->wbuf_sent) { // Ci sono dati nel buffer di scrittura (`c->wbuf`) da inviare?
+            // `write()` tenta di inviare i dati. Poiché il socket è non bloccante,
+            // `write()` potrebbe non inviare tutti i byte in una sola chiamata (write parziale).
+            ssize_t n_written = write(connfd, &c->wbuf[c->wbuf_sent], c->wbuf_size - c->wbuf_sent);
+
+            if (n_written > 0) { // Se `write()` ha inviato uno o più byte.
+                c->wbuf_sent += n_written; // Aggiorna il contatore dei byte inviati con successo.
+                c->last_activity_time = get_monotonic_time_ms(); // Aggiorna l'orario di ultima attività.
+            }
+
+            // Se tutti i dati nel buffer di scrittura (`c->wbuf`) sono stati inviati.
+            if (c->wbuf_sent == c->wbuf_size) {
+                c->wbuf_size = 0;   // Resetta la dimensione del buffer di scrittura, è ora vuoto.
+                c->wbuf_sent = 0; // Resetta il contatore dei byte inviati.
+                // CONSIDERAZIONE: In un server più avanzato, potremmo voler disattivare il monitoraggio
+                // di `POLLOUT` in `poll_args[i].events` quando `wbuf` è vuoto per ridurre il carico
+                // su `poll()` e riattivarlo solo quando ci sono nuovi dati da inviare.
+            }
+
+            // Gestione errori di scrittura.
+            if (n_written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // Il buffer di invio del kernel è pieno. Non è un errore, ma un'indicazione
+                // che `write()` non può accettare altri dati al momento.
+                // `poll()` ci notificherà di nuovo con `POLLOUT` quando sarà pronto.
+            }
+            else if (n_written < 0) {
+                // Errore reale di scrittura, trattato come disconnessione del client.
+                conn_close(pfd_idx); // Usa la funzione centralizzata di chiusura.
+            }
+        }
+    }
+}
 
 // =====================================================================================
 // FUNZIONE PRINCIPALE DI AVVIO E GESTIONE DEL SERVER
@@ -328,16 +331,16 @@ void server_run(void) {
     struct sockaddr_in addr = {}; // Inizializza la struct a zero per evitare valori "spazzatura".
     addr.sin_family = AF_INET;     // Famiglia di indirizzi (IPv4).
     addr.sin_port = ntohs(1234);   // Porta in cui il server si metterà in ascolto (qui: 1234).
-                                   // `ntohs()` (Network To Host Short): Converte l'ordine dei byte
-                                   // della porta da "network byte order" (big-endian) a "host byte order"
-                                   // (che può essere little-endian o big-endian a seconda dell'architettura).
-                                   // Questo garantisce la compatibilità di rete.
+    // `ntohs()` (Network To Host Short): Converte l'ordine dei byte
+    // della porta da "network byte order" (big-endian) a "host byte order"
+    // (che può essere little-endian o big-endian a seconda dell'architettura).
+    // Questo garantisce la compatibilità di rete.
     addr.sin_addr.s_addr = ntohl(0); // Indirizzo IP su cui ascoltare.
-                                     // `0.0.0.0` (rappresentato da 0) significa "ascolta su tutte
-                                     // le interfacce di rete disponibili sul sistema" (es. Ethernet, Wi-Fi, Loopback).
-                                     // `ntohl()` (Network To Host Long): Converte l'ordine dei byte per l'IP.
-    if (bind(listen_fd, (const struct sockaddr *)&addr, sizeof(addr))) die("bind()");
-    
+    // `0.0.0.0` (rappresentato da 0) significa "ascolta su tutte
+    // le interfacce di rete disponibili sul sistema" (es. Ethernet, Wi-Fi, Loopback).
+    // `ntohl()` (Network To Host Long): Converte l'ordine dei byte per l'IP.
+    if (bind(listen_fd, (const struct sockaddr*)&addr, sizeof(addr))) die("bind()");
+
     // 4. `listen()`: Mette il socket in modalità passiva (ascolto).
     //    Indica che il socket è pronto ad accettare connessioni in ingresso.
     //    `SOMAXCONN`: Questo parametro definisce la lunghezza massima della coda di
@@ -356,9 +359,9 @@ void server_run(void) {
     // Lo slot 0 è sempre riservato al socket di ascolto (`listen_fd`).
     poll_args[0].fd = listen_fd;
     poll_args[0].events = POLLIN; // Per il socket di ascolto, ci interessa solo
-                                 // quando ci sono nuove connessioni da accettare (evento `POLLIN`).
-    // Inizializziamo gli altri slot dell'array `poll_args` con `-1`. Un `fd` di `-1`
-    // indica a `poll()` di ignorare quello slot.
+    // quando ci sono nuove connessioni da accettare (evento `POLLIN`).
+// Inizializziamo gli altri slot dell'array `poll_args` con `-1`. Un `fd` di `-1`
+// indica a `poll()` di ignorare quello slot.
     for (int i = 1; i < MAX_CONN; i++) {
         poll_args[i].fd = -1;
     }
@@ -387,18 +390,18 @@ void server_run(void) {
         if (num_events == 0) {
             uint64_t now = get_monotonic_time_ms();
             for (int i = 1; i < MAX_CONN; i++) {
-                Conn *c = connections[i]; // Get the connection object for this slot
+                Conn* c = connections[i]; // Get the connection object for this slot
                 if (c && (now - c->last_activity_time > CONNECTION_TIMEOUT_MS)) {
                     printf("Client FD %d inattivo per troppo tempo. Chiudo connessione.\n", c->fd);
                     conn_close(i); // Use the centralized closing function with index.
                 }
             }
         }
-        
+
         // Una volta che `poll()` ritorna (cioè, si è verificato almeno un evento),
         // scorriamo l'array `poll_args` per identificare quali socket hanno eventi
         // e cosa è successo (`revents`).
-        
+
         // CASO A: Controlliamo il socket di ascolto (slot 0) per nuove connessioni.
         // Se `poll_args[0].revents` contiene `POLLIN`, significa che ci sono
         // nuove connessioni in attesa di essere accettate.
@@ -415,7 +418,7 @@ void server_run(void) {
             // Aggiungiamo anche il controllo `connections[i]->error` qui,
             // così da chiudere immediatamente le connessioni in errore segnalate da protocol.c.
             if (poll_args[i].fd != -1) { // Only process active slots
-                Conn *c = connections[i]; // Get the connection object for this slot
+                Conn* c = connections[i]; // Get the connection object for this slot
                 // If there are events or a protocol error, handle it.
                 if (poll_args[i].revents || (c && c->error)) {
                     // If there's a protocol error signaled by protocol.c, close the connection.
