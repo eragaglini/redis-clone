@@ -33,7 +33,7 @@ CMOCKA_SRC = lib/cmocka/src/cmocka.c
 CMOCKA_OBJ = $(CMOCKA_SRC:.c=.o)
 
 
-.PHONY: all clean run test
+.PHONY: all clean run test integration_test
 
 all: $(TARGET)
 
@@ -80,6 +80,10 @@ $(TEST_TARGET): $(TEST_OBJS) $(CMOCKA_OBJ)
 # --- Commands ---
 run: all
 	./$(TARGET)
+
+integration_test: all
+	@echo "Running integration tests..."
+	python3 -m pytest tests/test_integration.py
 
 clean:
 	rm -f src/*.o tests/*.o lib/cmocka/src/*.o $(TARGET) $(TEST_TARGET)

@@ -5,14 +5,14 @@ This document provides a high-level overview of the "Redis Clone" project, which
 ## Project Structure
 
 -   **`.gitignore`**: Standard Git ignore file.
--   **`client.py`**: A Python client demonstrating interaction with the C server using the `redis-py` library.
--   **`Makefile`**: Manages the build process, including compilation with `gcc` and linking of test components, and supports debug mode.
+-   **`Makefile`**: Manages the build process, including compilation with `gcc` and linking of test components, and supports debug mode. It also includes targets for running unit and integration tests.
 -   **`README.md`**: Project README.
--   **`bin/`**: Contains compiled executables (`main` for the server, `run_tests` for the test suite).
+-   **`bin/`**: Contains compiled executables (`main` for the server, `run_tests` for the C unit test suite).
 -   **`include/`**: Empty, intended for public headers.
 -   **`lib/cmocka/`**: Submodule containing the `cmocka` unit testing framework.
 -   **`src/`**: Contains the core C source files for the server.
--   **`tests/`**: Contains unit tests for the server components.
+-   **`tests/`**: Contains unit tests for the server components (`tests/main_test.c`) and Python-based integration tests (`tests/test_integration.py`).
+
 
 ## Core Components
 
@@ -42,22 +42,24 @@ These files define and implement the in-memory key-value store:
 -   **`store.h`**: Declares the data structures and functions for the key-value store.
 -   **`store.c`**: Implements the hash map used for storing keys and values. It provides functions for setting and getting values.
 
-## Client Interaction (`client.py`)
 
--   A Python script that demonstrates how to establish a connection with the C server.
--   It now utilizes the standard `redis-py` library for sending commands and receiving responses, including testing pipelined commands and `MULTI`/`EXEC` based transactions.
--   Includes functionality to test basic commands like `PING`, `SET`, and `GET`.
 
-## Testing (`tests/main_test.c`, `bin/run_tests`)
+## Testing (`cmocka` unit tests, `pytest` integration tests)
 
--   **Framework**: The project uses `cmocka` for unit testing.
--   **Test Focus**: Tests primarily target the `consume_buffer` function in `protocol.c`.
--   **Test Cases**: Cover scenarios such as:
-    -   Parsing a complete command received at once.
-    -   Parsing a command that arrives in fragmented chunks.
-    -   Parsing multiple commands sent simultaneously (fully functional pipelining).
-    -   Handling empty commands (0 arguments).
--   **Build Integration**: The `Makefile` compiles `tests/main_test.c` and `protocol.c` (along with `cmocka` sources) into the `bin/run_tests` executable.
+-   **Frameworks**: The project uses `cmocka` for C unit testing and `pytest` for Python-based integration testing.
+-   **`tests/main_test.c` (Unit Tests)**:
+    -   **Test Focus**: Primarily targets the `consume_buffer` function in `protocol.c`.
+    -   **Test Cases**: Cover scenarios such as:
+        -   Parsing a complete command received at once.
+        -   Parsing a command that arrives in fragmented chunks.
+        -   Parsing multiple commands sent simultaneously (fully functional pipelining).
+        -   Handling empty commands (0 arguments).
+    -   **Build Integration**: The `Makefile` compiles `tests/main_test.c` and `protocol.c` (along with `cmocka` sources) into the `bin/run_tests` executable, run via `make test`.
+-   **`tests/test_integration.py` (Integration Tests)**:
+    -   **Test Focus**: Verifies the end-to-end functionality of the C server by interacting with it via a `redis-py` client.
+    -   **Test Automation**: Uses `subprocess` to automatically start and stop the C server (`./bin/main`) for each test run.
+    -   **Test Cases**: Includes tests for basic commands (`PING`, `SET`, `GET`), non-existent keys, and simple command pipelining.
+    -   **Execution**: Run via `make integration_test`.
 
 ## Current Limitations / Future Work
 
