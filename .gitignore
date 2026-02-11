@@ -18,3 +18,4 @@ lib/cmocka/src/*.o
 *.swo
 *~
 /.venv/
+__pycache__/
