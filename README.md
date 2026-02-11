@@ -120,8 +120,9 @@ Il file `GEMINI.md` contiene una panoramica dettagliata del progetto, la sua arc
 
 Questo progetto è un clone rudimentale di Redis e, come tale, presenta diverse limitazioni e aree di sviluppo futuro:
 
-*   **Implementazione Parziale di Key-Value Store:** Il server ora supporta il parsing del comando `PING` e lo esegue correttamente. L'architettura per aggiungere altri comandi è stata impostata con la funzione `execute_command`. I comandi `SET` e `GET` non hanno ancora effetti reali sulla memoria, ma la struttura per un Key-Value store è stata definita (vedi `src/store.h`).
-*   **Set di Comandi Limitato:** Attualmente è implementato solo il comando `PING`. Altri comandi standard di Redis (come `SET`, `GET`, `DEL`, ecc.) devono ancora essere implementati in `execute_command`.
+*   **Implementazione di Key-Value Store:** Il server ora supporta i comandi `PING`, `SET` e `GET`, che interagiscono con una hash map in-memory. L'architettura per aggiungere altri comandi è stata impostata con la funzione `execute_command`. I dati vengono immagazzinati e recuperati correttamente.
+*   **Set di Comandi Limitato:** Attualmente sono implementati solo i comandi `PING`, `SET` e `GET`. Altri comandi standard di Redis (come `DEL`, `EXISTS`, ecc.) devono ancora essere implementati in `execute_command`.
 *   **Gestione Errori Protocollo:** Sebbene siano state implementate mitigazioni DoS e la gestione degli errori di protocollo sia più robusta, le risposte di errore ai client sono ancora generiche ("-ERR ..."). Una gestione più dettagliata e specifica degli errori sarebbe desiderabile.
-*   **Scalabilità e Robustezza:** Per un utilizzo in produzione, sarebbero necessarie ulteriori ottimizzazioni per la scalabilità (es. thread pool, epoll/kqueue) e una gestione degli errori più granulare (es. non abortire per errori non critici).
+*   **Scalabilità e Robustezza:** Per un utilizzo in produzione, sarebbero necessarie ulteriori ottimizzazioni per la scalabilità (es. thread pool, epoll/kqueue) e una gestione degli errori più granular (es. non abortire per errori non critici).
 *   **Mancanza di Persistenza:** Il server non salva i dati su disco, quindi tutti i dati vengono persi al riavvio.
+*   **Limitata Gestione Pipelining:** L'attuale implementazione del server e del client Python standard non supporta completamente il pipelining complesso di comandi, potendo portare a blocchi o comportamenti inattesi in sequenze rapide di comandi senza attesa di risposta.
