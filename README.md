@@ -46,33 +46,30 @@ Questo è un semplice server TCP scritto in C, progettato come un clone basilare
     ```
     Il server si metterà in ascolto sulla porta 1234.
 
-*   **Avviare il Client di Test:**
-    Il client Python fornito è stato aggiornato per utilizzare la libreria standard `redis-py`.
-    
-    1.  **Crea e attiva un ambiente virtuale (consigliato):**
-        ```bash
-        python3 -m venv .venv
-        source .venv/bin/activate
-        ```
-    2.  **Installa la libreria `redis-py`:**
-        ```bash
-        pip install redis
-        ```
-    3.  **Avvia il client:**
-        ```bash
-        python3 client.py
-        ```
-    Assicurati che il server C sia in esecuzione in un terminale separato.
 
-### Testing
 
-Il progetto usa CMocka per i test unitari.
+### Testing (Unitari e di Integrazione)
 
-*   **Compilare ed Eseguire i Test:**
-    ```bash
-    make test
-    ```
-    Questo comando compilerà ed eseguirà tutti i test definiti in `tests/main_test.c`.
+Il progetto usa CMocka per i test unitari e Pytest per i test di integrazione.
+
+*   **Test Unitari (C):**
+    *   **Compilare ed Eseguire i Test:**
+        ```bash
+        make test
+        ```
+        Questo comando compilerà ed eseguirà tutti i test unitari C definiti in `tests/main_test.c`.
+
+*   **Test di Integrazione (Python con Pytest):**
+    *   **Prerequisiti:**
+        Assicurati di avere `pytest` e `redis` installati nel tuo ambiente Python. Puoi installarli via `pip`:
+        ```bash
+        pip install -r requirements.txt
+        ```
+    *   **Compilare ed Eseguire i Test:**
+        ```bash
+        make integration_test
+        ```
+        Questo comando compilerà il server C e poi eseguirà i test di integrazione Python definiti in `tests/test_integration.py`. Il server C verrà automaticamente avviato e fermato come parte del processo di test.
 
 ### Modalità di Debug
 
@@ -95,7 +92,7 @@ Il progetto usa CMocka per i test unitari.
 
 ```
 .
-├── bin/              # Eseguibili compilati (main server, run_tests)
+├── bin/              # Eseguibili compilati (main server, run_tests per i test unitari C)
 ├── lib/              # Librerie di terze parti (CMocka)
 ├── src/
 │   └── main.c        # Codice sorgente principale del server
@@ -105,9 +102,10 @@ Il progetto usa CMocka per i test unitari.
 │   └── store.c       # Implementazione della struttura dati del Key-Value store
 │   └── store.h       # Dichiarazione della struttura dati del Key-Value store
 ├── tests/
-│   └── main_test.c   # Unit test per la logica del protocollo
-├── client.py         # Semplice client Python per testare il server (implementa il protocollo)
-├── Makefile          # Regole per la compilazione e l'esecuzione
+│   └── main_test.c   # Unit test C per la logica del protocollo
+│   └── test_integration.py # Test di integrazione Python con Pytest
+├── requirements.txt  # Dipendenze Python (pytest, redis-py)
+├── Makefile          # Regole per la compilazione, l'esecuzione e i test
 ├── .gitignore        # File e directory da ignorare con git
 ├── README.md         # Questo file
 └── GEMINI.md         # File di contesto per l'agente Gemini CLI
