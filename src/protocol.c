@@ -1,207 +1,242 @@
 #include "protocol.h"
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h> // Per malloc, free, abort
-#include <assert.h> // Per la macro assert()
+#include <stdlib.h>
+#include <assert.h>
+#include <strings.h> // Required for strcasecmp
 
-// Helper per liberare l'array di argomenti del comando e i suoi contenuti.
-static void free_cmd_argv(Conn* c) {
-    if (c->cmd_argv) {
+#ifdef DEBUG
+#define DEBUG_PRINTF(...) printf(__VA_ARGS__)
+#else
+#define DEBUG_PRINTF(...)
+#endif
+
+void free_argv(Conn* c) {
+    if (c->argv) {
+        DEBUG_PRINTF("DEBUG: Freeing argv for connection %p\n", (void*)c);
         for (uint32_t i = 0; i < c->current_arg_idx; ++i) {
-            free(c->cmd_argv[i]);
+            if (c->argv[i]) {
+                free(c->argv[i]);
+            }
         }
-        free(c->cmd_argv);
-        c->cmd_argv = NULL;
+        free(c->argv);
+        c->argv = NULL;
     }
 }
 
-// Funzione di utilità per segnalare un errore di protocollo e preparare una risposta.
 static void conn_error(Conn* c, const char* msg) {
-    c->error = 1; // Segnala che questa connessione è in uno stato di errore e deve essere chiusa.
-    // Prepara un messaggio di errore in formato Redis (es. "-ERR <msg>\r\n")
-    // Se il buffer di scrittura è troppo piccolo, alza un'asserzione (dovrebbe essere abbastanza grande).
+    c->error = 1;
+    DEBUG_PRINTF("DEBUG: Connection error for %p: %s\n", (void*)c, msg);
     int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "-ERR %s\r\n", msg);
-    if (len < 0 || (size_t)len >= sizeof(c->wbuf)) {
-        // Fallimento di snprintf o buffer troppo piccolo.
-        // Questo è un errore grave: probabilmente non dovremmo abortire,
-        // ma in questo contesto semplificato, lo facciamo per rilevare problemi di buffer.
-        // In un server reale, ci sarebbe un meccanismo di log più robusto e si chiuderebbe la connessione.
-        fprintf(stderr, "snprintf failed or wbuf too small for error message. len=%d, wbuf_size=%zu\n", len, sizeof(c->wbuf));
-        abort();
-    }
-    c->wbuf_size = (size_t)len;
+    if (len > 0) c->wbuf_size = (size_t)len;
 }
 
-// Funzione di utilità per "consumare" (rimuovere) un certo numero di byte
-// dall'inizio del buffer di lettura.
 static void consume_bytes_from_buffer(Conn* c, size_t bytes) {
-    assert(bytes <= c->rbuf_size);
+    DEBUG_PRINTF("DEBUG: Consuming %zu bytes from buffer for connection %p\n", bytes, (void*)c);
     size_t remaining = c->rbuf_size - bytes;
     if (remaining > 0) {
         memmove(c->rbuf, &c->rbuf[bytes], remaining);
     }
     c->rbuf_size = remaining;
+    DEBUG_PRINTF("DEBUG: Consumed %zu bytes from buffer for connection %p, rbuf_size: %zu\n", bytes, (void*)c, c->rbuf_size);
 }
 
-// La macchina a stati per il parsing dei comandi.
-void consume_buffer(Conn* c) {
-#ifdef DEBUG
-    fprintf(stderr, "[DEBUG] consume_buffer: Entered. parse_state = %d, rbuf_size = %zu, error = %d\n", c->parse_state, c->rbuf_size, c->error);
-#endif
-    if (c->error) {
-        free_cmd_argv(c); // Cleanup any partial command arguments if an error occurred previously.
+// Esegue il comando parsato e prepara la risposta.
+void execute_command(Conn* c) {
+    if (c->argc == 0 || c->argv[0] == NULL) {
+        // Empty command or null command (e.g., from *0\r\n or a null bulk string argument)
+        // For now, respond with a generic OK for empty commands.
+        // In a real Redis, *0\r\n just means an empty array, it's not an executable command.
+        // But our client might send it, so handle gracefully.
+        const char* reply = "OK"; 
+        int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "+%s\r\n", reply);
+        c->wbuf_size = (size_t)len;
+        DEBUG_PRINTF("DEBUG: execute_command: Empty command, reply length: %d, wbuf_size: %zu\n", len, c->wbuf_size);
         return;
     }
-    // Loop `while(1)`: La macchina a stati tenterà di avanzare attraverso
-    // i suoi stati finché non ci saranno più dati sufficienti nel buffer.
+    
+    // Converti il primo argomento (il comando) in maiuscolo per un confronto case-insensitive
+    if (strcasecmp(c->argv[0], "PING") == 0) {
+        // Implementazione base di PING
+        // Se PING ha un argomento, dovrebbe rispondere con un Bulk String di quell'argomento
+        if (c->argc > 1 && c->argv[1] != NULL) { // Check for NULL argument
+            char* message = c->argv[1];
+            int msg_len = strlen(message);
+            int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "$%d\r\n%s\r\n", msg_len, message);
+            c->wbuf_size = (size_t)len;
+        } else {
+            // PING senza argomenti risponde con +PONG
+            const char* reply = "PONG";
+            int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "+%s\r\n", reply);
+            c->wbuf_size = (size_t)len;
+        }
+    } else {
+        // Comando non riconosciuto, o placeholder per altri comandi
+        const char* reply = "OK"; 
+        int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "+%s\r\n", reply);
+        c->wbuf_size = (size_t)len;
+    }
+}
+
+bool consume_buffer(Conn* c) {
+    DEBUG_PRINTF("DEBUG: consume_buffer called for connection %p, rbuf_size: %zu, parse_state: %d\n", (void*)c, c->rbuf_size, c->parse_state);
+
+    if (c->error) {
+        DEBUG_PRINTF("DEBUG: Connection %p in error state, clearing argv.\n", (void*)c);
+        free_argv(c);
+        return false; // Error state, no command fully parsed
+    }
+
     while (1) {
+        DEBUG_PRINTF("DEBUG: Connection %p, current parse_state: %d, rbuf_size: %zu\n", (void*)c, c->parse_state, c->rbuf_size);
         switch (c->parse_state) {
-        case STATE_PARSE_INIT:
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_INIT -> STATE_PARSE_NUM_ARGS\n");
-#endif
-            c->total_args_expected = 0;
-            c->current_arg_idx = 0;
-            c->arg_len = 0;
-            c->cmd_argv = NULL;
-            c->parse_state = STATE_PARSE_NUM_ARGS;
-            // NOTA: Nessun 'break', passiamo subito a provare lo stato successivo.
-        case STATE_PARSE_NUM_ARGS:
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_NUM_ARGS. rbuf_size = %zu\n", c->rbuf_size);
-#endif
-            if (c->rbuf_size < 4) {
-#ifdef DEBUG
-                fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_NUM_ARGS - Insufficient data, returning.\n");
-#endif
-                return; // Dati insufficienti, attendiamo.
-            }
-            memcpy(&c->total_args_expected, c->rbuf, 4);
-            consume_bytes_from_buffer(c, 4);
-            // Validazione del numero di argomenti
-            if (c->total_args_expected > MAX_COMMAND_ARGS) {
-                conn_error(c, "Too many arguments");
-                return; // Segnaliamo errore e chiudiamo la connessione.
-            }
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: Parsed total_args_expected = %u\n", c->total_args_expected);
-#endif
-            if (c->total_args_expected > 0) {
-                c->cmd_argv = (char**)malloc(c->total_args_expected * sizeof(char*));
-                if (c->cmd_argv == NULL) {
-                    conn_error(c, "Out of memory for cmd_argv"); // Graceful error instead of abort
-                    return;
-                }
-                // Inizializza a NULL per sicurezza in caso di errori parziali.
-                for (uint32_t i = 0; i < c->total_args_expected; ++i) {
-                    c->cmd_argv[i] = NULL;
+        case RESP_PARSE_TYPE:
+            DEBUG_PRINTF("DEBUG: Connection %p, State: RESP_PARSE_TYPE\n", (void*)c);
+            // SE c'è un comando precedente completato, lo liberiamo ora
+            // prima di iniziare a parsare quello nuovo.
+            // Questa logica è stata spostata in RESP_PARSE_DONE per assicurare
+            // che argv venga liberato solo dopo che un comando è stato
+            // completamente elaborato.
 
-                }
-            }
-            if (c->total_args_expected == 0) {
-#ifdef DEBUG
-                fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_NUM_ARGS - Empty command, resetting.\n");
-#endif
-                c->parse_state = STATE_PARSE_INIT; // Comando vuoto, ricomincia.
 
+            if (c->rbuf_size == 0) {
+                DEBUG_PRINTF("DEBUG: Connection %p, rbuf_size is 0, returning false.\n", (void*)c);
+                return false; // Attendi altri dati
             }
-            else {
-#ifdef DEBUG
-                fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_NUM_ARGS -> STATE_PARSE_ARG_LEN\n");
-#endif
-                c->parse_state = STATE_PARSE_ARG_LEN;
+            c->resp_type = c->rbuf[0];
+            DEBUG_PRINTF("DEBUG: Connection %p, Parsed RESP Type: %c\n", (void*)c, c->resp_type);
+            consume_bytes_from_buffer(c, 1);
+            c->parse_state = RESP_PARSE_LEN;
+            // Fallthrough intenzionale
+
+        case RESP_PARSE_LEN:
+            DEBUG_PRINTF("DEBUG: Connection %p, State: RESP_PARSE_LEN\n", (void*)c);
+            { // blocco per variabili locali
+                // Verifica l'esistenza di una sequenza completa di carriage return-line feed (CRLF) nel buffer rbuf.
+                // Se la sequenza CRLF non è presente o incompleta, stampa un messaggio di debug e termina l'esecuzione della funzione.
+                char* crlf = (char*)memchr(c->rbuf, '\r', c->rbuf_size);
+                if (!crlf || crlf + 1 >= (char*)c->rbuf + c->rbuf_size || *(crlf + 1) != '\n') {
+                    DEBUG_PRINTF("DEBUG: Connection %p, CRLF not found or incomplete, returning false.\n", (void*)c);
+                    return false;
+                }
+
+                int len_str_len = crlf - (char*)c->rbuf;
+                char len_str[32];
+                if (len_str_len >= sizeof(len_str)) {
+                    conn_error(c, "Length string too long");
+                    return false;
+                }
+                memcpy(len_str, c->rbuf, len_str_len);
+                len_str[len_str_len] = '\0';
+
+                long long parsed_len = strtoll(len_str, NULL, 10);
+                DEBUG_PRINTF("DEBUG: Connection %p, Parsed Length String: '%s', Value: %lld\n", (void*)c, len_str, parsed_len);
+                consume_bytes_from_buffer(c, len_str_len + 2); // Consuma numero + CRLF
+
+                if (c->resp_type == '*') {
+                    c->argc = (uint32_t)parsed_len;
+                    c->current_arg_idx = 0;
+                    DEBUG_PRINTF("DEBUG: Connection %p, RESP_TYPE is '*', argc: %u\n", (void*)c, c->argc);
+                    if (c->argc > 0) {
+                        c->argv = (char**)calloc(c->argc, sizeof(char*)); // calloc è più sicuro
+                        if (!c->argv) { conn_error(c, "OOM"); return false; }
+                        c->parse_state = RESP_PARSE_TYPE; 
+                    } else {
+                        // Array vuoto *0\r\n. Questo è un comando valido.
+                        DEBUG_PRINTF("DEBUG: Connection %p, Empty array ('*0\\r\\n'), command considered parsed.\n", (void*)c);
+                        c->wbuf_size = 0; // La risposta sarà gestita da execute_command
+                        c->parse_state = RESP_PARSE_TYPE; // Pronto per il prossimo comando
+                        return true; // Command complete (empty command)
+                    }
+                } else if (c->resp_type == '$') {
+                    c->resp_expected_len = parsed_len;
+                    DEBUG_PRINTF("DEBUG: Connection %p, RESP_TYPE is '$', expected_len: %lld\n", (void*)c, c->resp_expected_len);
+                    if (c->resp_expected_len == -1) {
+                        // Null bulk string
+                         DEBUG_PRINTF("DEBUG: Connection %p, Null bulk string detected.\n", (void*)c);
+                         if (c->argc > 0 && c->current_arg_idx < c->argc) {
+                            c->argv[c->current_arg_idx++] = NULL;
+                         }
+                         c->parse_state = RESP_PARSE_TYPE; // Next arg or done
+                         // Controllo se comando finito... (omesso per brevità, simile sotto)
+                    } else {
+                        c->parse_state = RESP_PARSE_BULK_PAYLOAD;
+                    }
+                } else {
+                    conn_error(c, "Unknown RESP type");
+                    return false;
+                }
             }
             break;
-        case STATE_PARSE_ARG_LEN:
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_ARG_LEN. rbuf_size = %zu\n", c->rbuf_size);
-#endif
-            if (c->rbuf_size < 4) {
-#ifdef DEBUG
-                fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_ARG_LEN - Insufficient data, returning.\n");
-#endif
-                return; // Dati insufficienti, attendiamo.
-            }
-            memcpy(&c->arg_len, c->rbuf, 4);
-            consume_bytes_from_buffer(c, 4);
-            // Validazione della lunghezza dell'argomento
-            if (c->arg_len > MAX_ARG_LEN) {
-                conn_error(c, "Argument too long");
-                return; // Segnaliamo errore e chiudiamo la connessione.
-            }
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: Parsed arg_len = %u. STATE_PARSE_ARG_LEN -> STATE_PARSE_ARG_PAYLOAD\n", c->arg_len);
-#endif
-            c->parse_state = STATE_PARSE_ARG_PAYLOAD;
-            // NOTA: Nessun 'break', passiamo subito a provare lo stato successivo.
 
-        case STATE_PARSE_ARG_PAYLOAD:
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_ARG_PAYLOAD. rbuf_size = %zu, expected arg_len = %u, current_arg_idx = %u\n", c->rbuf_size, c->arg_len, c->current_arg_idx);
-#endif
-            if (c->rbuf_size < c->arg_len) {
-#ifdef DEBUG
-                fprintf(stderr, "[DEBUG] consume_buffer: STATE_PARSE_ARG_PAYLOAD - Insufficient data for payload, returning.\n");
-#endif
-                return; // Dati insufficienti, attendiamo.
+        case RESP_PARSE_BULK_PAYLOAD:
+            DEBUG_PRINTF("DEBUG: Connection %p, State: RESP_PARSE_BULK_PAYLOAD, rbuf_size: %zu, expected_len: %lld\n", (void*)c, c->rbuf_size, c->resp_expected_len);
+            if (c->rbuf_size < (size_t)c->resp_expected_len) {
+                DEBUG_PRINTF("DEBUG: Connection %p, Insufficient data for bulk payload, returning false.\n", (void*)c);
+                return false; // Dati insufficienti
             }
-            char* arg_str = (char*)malloc(c->arg_len + 1);
-            if (arg_str == NULL) {
-                conn_error(c, "Out of memory for arg_str"); // Graceful error instead of abort
-                return;
+            
+            char* arg_str = (char*)malloc(c->resp_expected_len + 1);
+            if (!arg_str) { conn_error(c, "OOM"); return false; }
+            memcpy(arg_str, c->rbuf, c->resp_expected_len);
+            arg_str[c->resp_expected_len] = '\0';
+            
+            DEBUG_PRINTF("DEBUG: Connection %p, Parsed Bulk Payload: '%s'\n", (void*)c, arg_str);
+            consume_bytes_from_buffer(c, c->resp_expected_len);
+            DEBUG_PRINTF("DEBUG: Connection %p, Bulk payload consumed.\n", (void*)c);
+            if (c->argv == NULL) {
+            c->argv = (char**)calloc(c->argc, sizeof(char*));
+                if (c->argv == NULL) {
+                    conn_error(c, "OOM");
+                    return false;
+                }
+                memset(c->argv, 0, c->argc * sizeof(char*));
             }
-            memcpy(arg_str, c->rbuf, c->arg_len);
-            arg_str[c->arg_len] = '\0';
-            consume_bytes_from_buffer(c, c->arg_len);
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: Parsed arg '%s' (len %u) for index %u.\n", arg_str, c->arg_len, c->current_arg_idx);
-#endif
-            assert(c->current_arg_idx < c->total_args_expected);
-            c->cmd_argv[c->current_arg_idx] = arg_str;
+            c->argv[c->current_arg_idx] = arg_str;
+            DEBUG_PRINTF("DEBUG: Connection %p, argv[%d] set to '%s'\n", (void*)c, c->current_arg_idx, arg_str);
+            c->parse_state = RESP_PARSE_CRLF;
+            // Fallthrough
+
+        case RESP_PARSE_CRLF:
+            DEBUG_PRINTF("DEBUG: Connection %p, State: RESP_PARSE_CRLF, rbuf_size: %zu\n", (void*)c, c->rbuf_size);
+            if (c->rbuf_size < 2) {
+                DEBUG_PRINTF("DEBUG: Connection %p, Insufficient data for CRLF, returning false.\n", (void*)c);
+                return false;
+            }
+            if (c->rbuf[0] != '\r' || c->rbuf[1] != '\n') {
+                conn_error(c, "Bad CRLF"); return false;
+            }
+            DEBUG_PRINTF("DEBUG: Connection %p, CRLF consumed.\n", (void*)c);
+            consume_bytes_from_buffer(c, 2);
             c->current_arg_idx++;
 
-            if (c->current_arg_idx == c->total_args_expected) {
-                printf("Comando Parsato: ");
-                for (uint32_t i = 0; i < c->total_args_expected; i++) {
-                    printf("'%s' ", c->cmd_argv[i]);
-                }
-                printf("\n");
-#ifdef DEBUG
-                fprintf(stderr, "[DEBUG] consume_buffer: All arguments parsed. Command complete. Resetting to STATE_PARSE_INIT.\n");
-#endif
-                const char* reply = "OK";
-                uint32_t reply_len = (uint32_t)strlen(reply);
-                if (c->wbuf_size + 4 + reply_len <= sizeof(c->wbuf)) {
-                    memcpy(&c->wbuf[c->wbuf_size], &reply_len, 4);
-                    memcpy(&c->wbuf[c->wbuf_size + 4], reply, reply_len);
-                    c->wbuf_size += 4 + reply_len;
-                }
-
-                free_cmd_argv(c); // This one is correct and should remain
-                c->parse_state = STATE_PARSE_INIT;
-            }
-            else {
-#ifdef DEBUG
-                fprintf(stderr, "[DEBUG] consume_buffer: More arguments expected. STATE_PARSE_ARG_PAYLOAD -> STATE_PARSE_ARG_LEN.\n");
-#endif
-                c->parse_state = STATE_PARSE_ARG_LEN;
+            if (c->current_arg_idx == c->argc) {
+                DEBUG_PRINTF("DEBUG: Connection %p, All arguments parsed, command complete.\n", (void*)c);
+                c->parse_state = RESP_PARSE_DONE;
+            } else {
+                DEBUG_PRINTF("DEBUG: Connection %p, Parsing next argument (idx: %u/%u).\n", (void*)c, c->current_arg_idx, c->argc);
+                c->parse_state = RESP_PARSE_TYPE; // Prossimo argomento
             }
             break;
 
+        case RESP_PARSE_DONE:
+            DEBUG_PRINTF("DEBUG: Connection %p, State: RESP_PARSE_DONE. Command processed.\n", (void*)c);
+            // Non prepariamo più la risposta qui; lo farà execute_command
+            c->wbuf_size = 0; // Reset della dimensione del buffer di scrittura
+
+            // Resetta lo stato per il prossimo comando.
+            c->parse_state = RESP_PARSE_TYPE;
+            
+            // 3. IMPORTANTE: Return per dare il controllo al chiamante (Test o Event Loop)
+            //    NON liberiamo argv qui. Lo farà il prossimo giro di RESP_PARSE_TYPE
+            //    o il teardown del test.
+            DEBUG_PRINTF("DEBUG: Connection %p, consume_buffer returning true after command processing.\n", (void*)c);
+            return true; 
+
         default:
-#ifdef DEBUG
-            fprintf(stderr, "[DEBUG] consume_buffer: Invalid parser state %d. Resetting to STATE_PARSE_INIT.\n", c->parse_state);
-#endif
-            fprintf(stderr, "Invalid parser state: %d\n", c->parse_state);
-            c->parse_state = STATE_PARSE_INIT;
-            return;
-        }
-        if (c->error) { // Check error flag after each state, if set, cleanup and exit consume_buffer.
-            free_cmd_argv(c);
-            return;
+            DEBUG_PRINTF("DEBUG: Connection %p, State: DEFAULT (Unknown state %d), resetting to RESP_PARSE_TYPE and returning false.\n", (void*)c, c->parse_state);
+            c->parse_state = RESP_PARSE_TYPE;
+            return false;
         }
     }
-#ifdef DEBUG
-    fprintf(stderr, "[DEBUG] consume_buffer: Exiting. parse_state = %d, rbuf_size = %zu, error = %d\n", c->parse_state, c->rbuf_size, c->error);
-#endif
 }

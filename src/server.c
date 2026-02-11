@@ -206,8 +206,8 @@ static void handle_new_connection(int listen_fd) {
         // Inizializzazione pulita della nuova struct Conn.
         c->fd = connfd;
         c->rbuf_size = 0; c->wbuf_size = 0; c->wbuf_sent = 0;
-        c->parse_state = STATE_PARSE_INIT; c->total_args_expected = 0; c->current_arg_idx = 0;
-        c->arg_len = 0; c->cmd_argv = NULL; c->error = 0;
+        c->parse_state = RESP_PARSE_TYPE; c->argc = 0; c->current_arg_idx = 0;
+        c->resp_expected_len = 0; c->argv = NULL; c->error = 0;
         c->last_activity_time = get_monotonic_time_ms();
 
         connections[j] = c; // Mappa la `Conn` struct allo slot `j`.
@@ -242,7 +242,17 @@ static void handle_client_io(int pfd_idx) {
             // Passa il controllo alla funzione `consume_buffer` (definita in `protocol.c`).
             // Questa funzione si occupa della "logica pura" di parsing dei messaggi e
             // di generazione delle risposte, operando solo sui buffer della `Conn` struct.
-            consume_buffer(c);
+            bool command_parsed = consume_buffer(c);
+            // Dopo che consume_buffer ha elaborato il comando e ha preparato
+            // una risposta, se un comando completo è stato parsato (command_parsed è true),
+            // dobbiamo liberare la memoria allocata per gli argomenti del comando.
+            if (command_parsed) {
+                 // Un comando completo è stato parsato.
+                 // Esegui il comando e prepara la risposta.
+                 execute_command(c);
+                 // Libera gli argomenti del comando.
+                 free_argv(c);
+            }
         }
 
         // Gestione della disconnessione o errori di lettura.
