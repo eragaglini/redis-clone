@@ -8,23 +8,45 @@
 #include <cmocka.h>
 
 #include "protocol.h"
+#include "store.h" // Include for HashMap and store functions
 
 // --- SETUP & TEARDOWN ---
 
+// Struttura per passare più oggetti ai test
+typedef struct {
+    Conn* conn;
+    HashMap* store;
+} TestState;
+
 static int setup(void** state) {
-    Conn* conn = (Conn*)calloc(1, sizeof(Conn));
-    assert_non_null(conn);
-    conn->parse_state = RESP_PARSE_TYPE;
-    *state = conn;
+    TestState* test_state = (TestState*)calloc(1, sizeof(TestState));
+    assert_non_null(test_state);
+
+    test_state->conn = (Conn*)calloc(1, sizeof(Conn));
+    assert_non_null(test_state->conn);
+    test_state->conn->parse_state = RESP_PARSE_TYPE;
+
+    test_state->store = (HashMap*)calloc(1, sizeof(HashMap));
+    assert_non_null(test_state->store);
+    store_init(test_state->store);
+
+    *state = test_state;
     return 0;
 }
 
 
 static int teardown(void** state) {
-    Conn* conn = (Conn*)*state;
-    if (conn) {
-        free_argv(conn); // Pulisce argv se esiste
-        free(conn);      // Pulisce la struttura
+    TestState* test_state = (TestState*)*state;
+    if (test_state) {
+        if (test_state->conn) {
+            free_argv(test_state->conn); // Pulisce argv se esiste
+            free(test_state->conn);      // Pulisce la struttura Conn
+        }
+        if (test_state->store) {
+            store_free(test_state->store); // Libera tutti gli elementi dello store
+            free(test_state->store);       // Libera la struttura HashMap
+        }
+        free(test_state); // Libera la struttura TestState
     }
     return 0;
 }
@@ -54,7 +76,8 @@ static void build_fake_command(uint8_t* buffer, size_t buffer_size, size_t* size
 
 // Test 1: Comando intero
 static void test_parse_full_command_at_once(void** state) {
-    Conn* conn = (Conn*)*state;
+    TestState* test_state = (TestState*)*state;
+    Conn* conn = test_state->conn;
 
     uint8_t buf[K_MAX_MSG];
     size_t size;
@@ -78,7 +101,8 @@ static void test_parse_full_command_at_once(void** state) {
 
 // Test 2: Comando a pezzi
 static void test_parse_command_in_chunks(void** state) {
-    Conn* conn = (Conn*)*state;
+    TestState* test_state = (TestState*)*state;
+    Conn* conn = test_state->conn;
     uint8_t full_buf[K_MAX_MSG];
     size_t full_size;
     build_fake_command(full_buf, K_MAX_MSG, &full_size, 2, "GET", "a_key");
@@ -121,7 +145,8 @@ static void test_parse_command_in_chunks(void** state) {
 
 // Test 3: Due comandi in un solo buffer (Pipelining)
 static void test_parse_two_commands_at_once(void** state) {
-    Conn* conn = (Conn*)*state;
+    TestState* test_state = (TestState*)*state;
+    Conn* conn = test_state->conn;
 
     uint8_t buf1[K_MAX_MSG];
     size_t size1;
@@ -154,7 +179,9 @@ static void test_parse_two_commands_at_once(void** state) {
 
 // Test 4: Comando array vuoto (es. Heartbeat custom o errore client)
 static void test_parse_empty_command(void** state) {
-    Conn* conn = (Conn*)*state;
+    TestState* test_state = (TestState*)*state;
+    Conn* conn = test_state->conn;
+    HashMap* store = test_state->store;
 
     // *0\r\n
     char* empty_cmd = "*0\r\n";
@@ -167,7 +194,7 @@ static void test_parse_empty_command(void** state) {
     consume_buffer(conn);
 
     // Eseguiamo il comando per generare la risposta
-    execute_command(conn);
+    execute_command(conn, store);
 
     // Verifichiamo che la risposta sia stata generata
     assert_int_equal(conn->parse_state, RESP_PARSE_TYPE); // Pronto per il prossimo comando

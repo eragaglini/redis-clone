@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h> // Include for bool type
+#include "store.h"
 
 // La dimensione massima per il payload di un singolo messaggio (4KB).
 #define K_MAX_MSG 4096
@@ -61,6 +62,5 @@ bool consume_buffer(Conn* c);
 void free_argv(Conn* c);
 
 // Esegue il comando parsato e prepara la risposta.
-void execute_command(Conn* c);
-
+void execute_command(Conn* c, HashMap* store);
 #endif // PROTOCOL_H
