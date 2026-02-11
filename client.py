@@ -38,7 +38,7 @@ def main():
         assert response_get == value 
         time.sleep(0.5)
 
-        print("--- Test 2.1: GET di chiave non esistente ---")
+        # print("--- Test 2.1: GET di chiave non esistente ---")
         non_existent_key = "nonexistentkey"
         response_get_non_existent = r.get(non_existent_key)
         print(f"GET '{non_existent_key}' response: {response_get_non_existent}")
@@ -47,16 +47,16 @@ def main():
         print()
         
         # --- TEST 3: Pipeline (semplice) ---
-        # print("--- Test 3: Pipeline (semplice) ---")
-        # pipe = r.pipeline()
-        # pipe.set("key1", "value1")
-        # pipe.get("key1")
-        # pipe.ping()
-        # responses_pipeline = pipe.execute()
-        # print(f"Pipeline responses: {responses_pipeline}")
-        # assert responses_pipeline == [True, "value1", True]
-        # time.sleep(0.5)
-        # print()
+        print("--- Test 3: Pipeline (semplice) ---")
+        pipe = r.pipeline()
+        pipe.set("key1", "value1")
+        pipe.get("key1")
+        pipe.ping()
+        responses_pipeline = pipe.execute()
+        print(f"Pipeline responses: {responses_pipeline}")
+        assert responses_pipeline == [True, "value1", True]
+        time.sleep(0.5)
+        print()
 
     except redis.exceptions.ConnectionError as e:
         print(f"ERRORE DI CONNESSIONE: Impossibile connettersi al server Redis. Il server è acceso? Dettagli: {e}")
