@@ -149,6 +149,7 @@ static void conn_close(int pfd_idx) { // Ora accetta l'indice dell'array poll_ar
 
     // Libera la memoria allocata per la struct Conn.
     free_command_list(c); // Libera la lista di comandi accodati.
+    free_queued_command_list(c); // Libera la lista di comandi in coda per la transazione.
     free(c);
 }
 
@@ -216,6 +217,10 @@ static void handle_new_connection(int listen_fd) {
         c->last_activity_time = get_monotonic_time_ms();
         c->cmd_list_head = NULL;
         c->cmd_list_tail = NULL;
+        // Initialize transaction state
+        c->in_transaction = false;
+        c->queued_cmds_head = NULL;
+        c->queued_cmds_tail = NULL;
 
         connections[j] = c; // Mappa la `Conn` struct allo slot `j`.
         conn_put(&poll_args[j], c); // Inizializza lo slot `pollfd` per il client.
@@ -258,7 +263,17 @@ static void handle_client_io(int pfd_idx) {
             // Passa il controllo alla funzione `consume_buffer` (definita in `protocol.c`).
             // Questa funzione si occupa della "logica pura" di parsing dei messaggi e
             // di generazione delle risposte, operando solo sui buffer della `Conn` struct.
-            consume_buffer(c);
+            // Continuously consume commands from the buffer until no more full commands can be parsed.
+            while (c->rbuf_size > 0 && !c->error) {
+                size_t old_rbuf_size = c->rbuf_size;
+                consume_buffer(c);
+                // If consume_buffer didn't consume any bytes, it means it's waiting for more data
+                // or encountered an incomplete command. Break the loop.
+                if (c->rbuf_size == old_rbuf_size) {
+                    break;
+                }
+            }
+
             // Dopo che consume_buffer ha elaborato il comando e ha preparato
             // una risposta, se un comando completo è stato parsato (command_parsed è true),
             // dobbiamo ora eseguire i comandi accodati.

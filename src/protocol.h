@@ -66,7 +66,16 @@ typedef struct {
     Command* cmd_list_head;
     Command* cmd_list_tail;
 
+    // --- Transaction State ---
+    bool in_transaction;            // True if MULTI command has been issued
+    Command* queued_cmds_head;      // Head of the list of commands queued during a transaction
+    Command* queued_cmds_tail;      // Tail of the list of commands queued during a transaction
+
 } Conn;
+
+// Crea un nuovo comando e lo appende alla lista specificata (head, tail).
+// Restituisce il puntatore al nuovo comando in caso di successo, NULL altrimenti.
+Command* cmd_create_and_append(Conn* c, char** argv, uint32_t argc, Command** head, Command** tail);
 
 // Funzione per il parsing del buffer e la preparazione della risposta.
 void consume_buffer(Conn* c);
@@ -77,6 +86,12 @@ void free_argv(Conn* c);
 // Libera tutti i comandi nella lista della connessione.
 void free_command_list(Conn* c);
 
+// Libera tutti i comandi nella lista di comandi accodati per la transazione.
+void free_queued_command_list(Conn* c);
+
 // Esegue il comando parsato e prepara la risposta.
 void execute_command(Conn* c, HashMap* store);
+
+// Esegue un singolo comando e restituisce la sua risposta in una stringa allocata dinamicamente.
+char* get_command_reply(Conn* c, Command* cmd, HashMap* store);
 #endif // PROTOCOL_H

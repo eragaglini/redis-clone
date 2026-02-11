@@ -27,13 +27,14 @@ void free_argv(Conn* c) {
 
 static void conn_error(Conn* c, const char* msg);
 
-// Appende un comando alla lista di comandi della connessione.
-void cmd_append(Conn* c, char** argv, uint32_t argc) {
-    DEBUG_PRINTF("DEBUG: Appending command to connection %p: argc = %u\n", (void*)c, argc);
+// Crea un nuovo comando e lo appende alla lista specificata (head, tail).
+// Restituisce il puntatore al nuovo comando in caso di successo, NULL altrimenti.
+Command* cmd_create_and_append(Conn* c, char** argv, uint32_t argc, Command** head, Command** tail) {
+    DEBUG_PRINTF("DEBUG: Creating and appending command for connection %p: argc = %u\n", (void*)c, argc);
     Command* cmd = (Command*)malloc(sizeof(Command));
     if (!cmd) {
         conn_error(c, "OOM during command allocation");
-        return;
+        return NULL;
     }
     memset(cmd, 0, sizeof(Command));
 
@@ -41,15 +42,16 @@ void cmd_append(Conn* c, char** argv, uint32_t argc) {
     cmd->argv = argv; // Assume ownership of argv
     cmd->next = NULL;
 
-    if (c->cmd_list_tail == NULL) {
-        c->cmd_list_head = cmd;
-        c->cmd_list_tail = cmd;
+    if (*head == NULL) {
+        *head = cmd;
+        *tail = cmd;
     }
     else {
-        c->cmd_list_tail->next = cmd;
-        c->cmd_list_tail = cmd;
+        (*tail)->next = cmd;
+        *tail = cmd;
     }
-    DEBUG_PRINTF("DEBUG: Command appended. Head: %p, Tail: %p\n", (void*)c->cmd_list_head, (void*)c->cmd_list_tail);
+    DEBUG_PRINTF("DEBUG: Command appended. Head: %p, Tail: %p\n", (void*)*head, (void*)*tail);
+    return cmd;
 }
 
 // Libera tutti i comandi nella lista della connessione.
@@ -74,6 +76,28 @@ void free_command_list(Conn* c) {
     DEBUG_PRINTF("DEBUG: Command list freed for connection %p\n", (void*)c);
 }
 
+// Libera tutti i comandi nella lista di comandi accodati per la transazione.
+void free_queued_command_list(Conn* c) {
+    DEBUG_PRINTF("DEBUG: Freeing queued command list for connection %p\n", (void*)c);
+    Command* cmd = c->queued_cmds_head;
+    while (cmd) {
+        Command* next = cmd->next;
+        if (cmd->argv) {
+            for (uint32_t i = 0; i < cmd->argc; ++i) {
+                if (cmd->argv[i]) {
+                    free(cmd->argv[i]);
+                }
+            }
+            free(cmd->argv);
+        }
+        free(cmd);
+        cmd = next;
+    }
+    c->queued_cmds_head = NULL;
+    c->queued_cmds_tail = NULL;
+    DEBUG_PRINTF("DEBUG: Queued command list freed for connection %p\n", (void*)c);
+}
+
 static void conn_error(Conn* c, const char* msg) {
     c->error = 1;
     DEBUG_PRINTF("DEBUG: Connection error for %p: %s\n", (void*)c, msg);
@@ -89,6 +113,77 @@ static void consume_bytes_from_buffer(Conn* c, size_t bytes) {
     DEBUG_PRINTF("DEBUG: Consumed %zu bytes from buffer for connection %p, rbuf_size: %zu\n", bytes, (void*)c, c->rbuf_size);
 }
 
+// Esegue un singolo comando e restituisce la sua risposta in una stringa allocata dinamicamente.
+// La stringa restituita deve essere liberata dal chiamante.
+char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
+    // Usiamo una dimensione maggiore per il buffer temporaneo per le risposte,
+    // specialmente per gestire risposte a array o stringhe bulk più lunghe.
+    // Un K_MAX_MSG * 2 dovrebbe essere sufficiente, considerando che K_MAX_MSG è 4096.
+    char reply_buf[K_MAX_MSG * 2];
+    int len = 0;
+
+
+
+    if (cmd->argc == 0 || cmd->argv[0] == NULL) {
+        const char* reply_str = "OK";
+        len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+    }
+    else if (strcasecmp(cmd->argv[0], "PING") == 0) {
+        if (cmd->argc > 1 && cmd->argv[1] != NULL) {
+            char* message = cmd->argv[1];
+            int msg_len = strlen(message);
+            len = snprintf(reply_buf, sizeof(reply_buf), "$%d\r\n%s\r\n", msg_len, message);
+        }
+        else {
+            const char* reply_str = "PONG";
+            len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "SET") == 0) {
+        if (cmd->argc != 3) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'set' command\r\n");
+        }
+        else if (store_set(store, cmd->argv[1], cmd->argv[2])) {
+            const char* reply_str = "OK";
+            len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+        }
+        else {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR OOM during SET\r\n");
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "GET") == 0) {
+        if (cmd->argc != 2) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'get' command\r\n");
+        }
+        else {
+            char* value = store_get(store, cmd->argv[1]);
+            if (value) {
+                int val_len = strlen(value);
+                len = snprintf(reply_buf, sizeof(reply_buf), "$%d\r\n%s\r\n", val_len, value);
+                free(value); // Free the duplicated string from store_get
+            }
+            else {
+                const char* reply_str = "-1";
+                len = snprintf(reply_buf, sizeof(reply_buf), "$%s\r\n", reply_str);
+            }
+        }
+    }
+    else {
+        // Unknown command
+        const char* reply_str = "OK"; // Default to OK for unknown commands
+        len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+    }
+
+    if (len <= 0 || len >= sizeof(reply_buf)) {
+        // Handle snprintf error or buffer overflow
+        DEBUG_PRINTF("ERROR: snprintf failed or buffer overflow in get_command_reply.\n");
+        return strdup("-ERR Internal server error\r\n");
+    }
+
+    // Return a dynamically allocated copy of the reply
+    return strdup(reply_buf);
+}
+
 // Esegue i comandi parsati e prepara le risposte.
 void execute_command(Conn* c, HashMap* store) {
     DEBUG_PRINTF("DEBUG: execute_command called for connection %p\n", (void*)c);
@@ -99,78 +194,113 @@ void execute_command(Conn* c, HashMap* store) {
             c->cmd_list_tail = NULL; // List is now empty
         }
 
-        // Print command arguments for debugging
-        DEBUG_PRINTF("DEBUG: Executing command (argc: %u): ", cmd->argc);
-        for (uint32_t i = 0; i < cmd->argc; ++i) {
-            DEBUG_PRINTF("'%s'%s", cmd->argv[i] ? cmd->argv[i] : "(nil)", i == cmd->argc - 1 ? "" : ", ");
-        }
-        DEBUG_PRINTF("\n");
 
-        if (cmd->argc == 0 || cmd->argv[0] == NULL) {
-            const char* reply = "OK";
-            int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "+%s\r\n", reply);
-            if (len > 0) c->wbuf_size += (size_t)len;
-            DEBUG_PRINTF("DEBUG: execute_command: Empty command, reply length: %d, wbuf_size: %zu\n", len, c->wbuf_size);
-        }
-        else if (strcasecmp(cmd->argv[0], "PING") == 0) {
-            if (cmd->argc > 1 && cmd->argv[1] != NULL) {
-                char* message = cmd->argv[1];
-                int msg_len = strlen(message);
-                int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "$%d\r\n%s\r\n", msg_len, message);
-                if (len > 0) c->wbuf_size += (size_t)len;
-            }
-            else {
-                const char* reply = "PONG";
-                int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "+%s\r\n", reply); // Redis PONG is just +PONG\r\n
-                if (len > 0) c->wbuf_size += (size_t)len;
-            }
-        }
-        else if (strcasecmp(cmd->argv[0], "SET") == 0) {
-            if (cmd->argc != 3) {
-                int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "-ERR wrong number of arguments for 'set' command\r\n");
-                if (len > 0) c->wbuf_size += (size_t)len;
-            }
-            else if (store_set(store, cmd->argv[1], cmd->argv[2])) {
-                const char* reply = "OK";
-                int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "+%s\r\n", reply);
-                if (len > 0) c->wbuf_size += (size_t)len;
-            }
-            else {
-                int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "-ERR OOM during SET\r\n");
-                if (len > 0) c->wbuf_size += (size_t)len;
-            }
-        }
-        else if (strcasecmp(cmd->argv[0], "GET") == 0) {
-            if (cmd->argc != 2) {
-                int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "-ERR wrong number of arguments for 'get' command\r\n");
-                if (len > 0) c->wbuf_size += (size_t)len;
-            }
-            else {
-                char* value = store_get(store, cmd->argv[1]);
-                if (value) {
-                    int val_len = strlen(value);
-                    int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "$%d\r\n%s\r\n", val_len, value);
-                    if (len > 0) c->wbuf_size += (size_t)len;
-                    free(value); // Free the duplicated string from store_get
+
+        char* reply = NULL; // Dynamically allocated reply string
+
+        // Handle transaction commands
+        if (cmd->argc > 0 && cmd->argv[0] != NULL) {
+            if (strcasecmp(cmd->argv[0], "MULTI") == 0) {
+                if (c->in_transaction) {
+                    reply = strdup("-ERR MULTI already in progress\r\n");
+                } else {
+                    c->in_transaction = true;
+                    reply = strdup("+OK\r\n");
                 }
-                else {
-                    // Key not found, return null bulk string
-                    // Redis null bulk string is "$-1\r\n"
-                    const char* reply_str = "-1";
-                    int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "$%s\r\n", reply_str);
-                    if (len > 0) c->wbuf_size += (size_t)len;
+            } else if (strcasecmp(cmd->argv[0], "EXEC") == 0) {
+                if (!c->in_transaction) {
+                    reply = strdup("-ERR EXEC without MULTI\r\n");
+                } else {
+                    // Execute all queued commands
+                    c->in_transaction = false; // Transaction ends with EXEC
+                    if (c->queued_cmds_head == NULL) {
+                        reply = strdup("*0\r\n"); // Empty array reply if no commands were queued
+                    } else {
+                        // Build array of results for EXEC
+                        // First, calculate total length needed for all replies
+                        size_t total_replies_len = 0;
+                        Command* current_queued_cmd = c->queued_cmds_head;
+                        // Temporary storage for individual replies from queued commands
+                        char* individual_replies[K_MAX_MSG]; // Max K_MAX_MSG queued commands
+                        int reply_count = 0;
+
+                        while (current_queued_cmd != NULL) {
+                            if (reply_count >= K_MAX_MSG) {
+                                DEBUG_PRINTF("WARNING: Too many queued commands, truncating EXEC response.\n");
+                                break;
+                            }
+                            // Execute the queued command and get its reply
+                            char* q_reply = get_command_reply(c, current_queued_cmd, store);
+                            if (q_reply) {
+                                individual_replies[reply_count++] = q_reply;
+                                total_replies_len += strlen(q_reply);
+                            } else {
+                                individual_replies[reply_count++] = strdup("-ERR Internal server error during EXEC\r\n");
+                                total_replies_len += strlen(individual_replies[reply_count - 1]);
+                            }
+                            current_queued_cmd = current_queued_cmd->next;
+                        }
+
+                        // Allocate buffer for the final EXEC array reply
+                        // Format: *<num_replies>\r\n<reply1_str><reply2_str>...
+                        // Add room for *<num_replies>\r\n and null terminator
+                        char* exec_reply_buf = (char*)malloc(total_replies_len + 32); // 32 is a generous estimate for *<num>\r\n
+                        if (!exec_reply_buf) {
+                            reply = strdup("-ERR OOM during EXEC reply construction\r\n");
+                            // Free individual replies if OOM
+                            for (int i = 0; i < reply_count; ++i) {
+                                free(individual_replies[i]);
+                            }
+                        } else {
+                            int offset = snprintf(exec_reply_buf, total_replies_len + 32, "*%d\r\n", reply_count);
+                            for (int i = 0; i < reply_count; ++i) {
+                                offset += snprintf(exec_reply_buf + offset, total_replies_len + 32 - offset, "%s", individual_replies[i]);
+                                free(individual_replies[i]); // Free individual reply
+                            }
+                            reply = exec_reply_buf;
+                        }
+                    }
+                    free_queued_command_list(c); // Clear the queued commands after EXEC
                 }
+            } else if (strcasecmp(cmd->argv[0], "DISCARD") == 0) {
+                if (!c->in_transaction) {
+                    reply = strdup("-ERR DISCARD without MULTI\r\n");
+                } else {
+                    c->in_transaction = false;
+                    free_queued_command_list(c); // Discard queued commands
+                    reply = strdup("+OK\r\n");
+                }
+            } else if (c->in_transaction) {
+                // If in transaction, queue the command
+                // cmd_create_and_append will take ownership of cmd->argv
+                cmd_create_and_append(c, cmd->argv, cmd->argc, &c->queued_cmds_head, &c->queued_cmds_tail);
+                // Important: clear cmd->argv from the original cmd struct
+                // so it's not freed twice later.
+                cmd->argv = NULL; // Ownership transferred to queued command.
+                reply = strdup("+QUEUED\r\n");
             }
-        }
-        else {
-            // Unknown command
-            const char* reply = "OK";
-            int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "+%s\r\n", reply);
-            if (len > 0) c->wbuf_size += (size_t)len;
         }
 
-        // Free the command and its arguments
-        if (cmd->argv) {
+        // If not a transaction command or not in transaction, execute normally
+        if (reply == NULL) {
+            reply = get_command_reply(c, cmd, store);
+        }
+
+        if (reply) {
+            // Append reply to write buffer
+            size_t reply_len = strlen(reply);
+            if (c->wbuf_size + reply_len < sizeof(c->wbuf)) {
+                memcpy(c->wbuf + c->wbuf_size, reply, reply_len);
+                c->wbuf_size += reply_len;
+            } else {
+                DEBUG_PRINTF("ERROR: Write buffer overflow, dropping reply.\n");
+                // In a real server, would need to handle this by flushing wbuf or resizing.
+            }
+            free(reply); // Free the dynamically allocated reply
+        }
+
+        // Free the command and its arguments (if not transferred to queued list)
+        if (cmd->argv) { // Check if ownership was transferred to queued_cmds.
             for (uint32_t i = 0; i < cmd->argc; ++i) {
                 if (cmd->argv[i]) {
                     free(cmd->argv[i]);
@@ -250,7 +380,7 @@ void consume_buffer(Conn* c) {
                     else {
                         // Array vuoto *0\r\n. Questo è un comando valido.
                         DEBUG_PRINTF("DEBUG: Connection %p, Empty array ('*0\\r\\n'), command considered parsed.\n", (void*)c);
-                        cmd_append(c, NULL, 0); // Append an empty command
+                        cmd_create_and_append(c, NULL, 0, &c->cmd_list_head, &c->cmd_list_tail); // Append an empty command
                         c->argc = 0;
                         c->current_arg_idx = 0;
                         c->parse_state = RESP_PARSE_TYPE; // Pronto per il prossimo comando
@@ -348,7 +478,7 @@ void consume_buffer(Conn* c) {
         case RESP_PARSE_DONE:
             DEBUG_PRINTF("DEBUG: Connection %p, State: RESP_PARSE_DONE. Command processed.\n", (void*)c);
 
-            cmd_append(c, c->argv, c->argc); // Append the parsed command to the connection's command list
+            cmd_create_and_append(c, c->argv, c->argc, &c->cmd_list_head, &c->cmd_list_tail); // Append the parsed command to the connection's command list
 
             // Reset parsing-related fields for the next command
             c->argv = NULL; // ownership transferred to Command struct
