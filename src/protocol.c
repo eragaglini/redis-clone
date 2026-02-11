@@ -99,6 +99,13 @@ void execute_command(Conn* c, HashMap* store) {
             c->cmd_list_tail = NULL; // List is now empty
         }
 
+        // Print command arguments for debugging
+        DEBUG_PRINTF("DEBUG: Executing command (argc: %u): ", cmd->argc);
+        for (uint32_t i = 0; i < cmd->argc; ++i) {
+            DEBUG_PRINTF("'%s'%s", cmd->argv[i] ? cmd->argv[i] : "(nil)", i == cmd->argc - 1 ? "" : ", ");
+        }
+        DEBUG_PRINTF("\n");
+
         if (cmd->argc == 0 || cmd->argv[0] == NULL) {
             const char* reply = "OK";
             int len = snprintf((char*)c->wbuf + c->wbuf_size, sizeof(c->wbuf) - c->wbuf_size, "+%s\r\n", reply);
