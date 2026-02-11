@@ -5,7 +5,8 @@ Questo è un semplice server TCP scritto in C, progettato come un clone basilare
 ## Caratteristiche Principali
 
 *   **Implementazione Protocollo RESP (Redis Serialization Protocol):** Il server ora interpreta una versione semplificata del protocollo RESP di Redis, permettendo l'interazione con client standard (es. `redis-py`).
-*   **Supporto Comandi Basilari:** Supporto iniziale per il comando `PING`, con una chiara separazione tra parsing del comando e logica di esecuzione.
+*   **Supporto Comandi Basilari e Transazioni:** Supporto per i comandi `PING`, `SET`, `GET` e per le transazioni con `MULTI`/`EXEC`/`DISCARD`. La separazione tra parsing del comando e logica di esecuzione è chiara.
+*   **Pipelining Completo:** Il server gestisce correttamente il pipelining di comandi, elaborando più comandi inviati in una singola richiesta senza problemi di blocco.
 *   **Mitigazioni DOS:** Include meccanismi per prevenire Denial of Service attraverso la validazione dei limiti del protocollo e l'implementazione di timeout per le connessioni inattive.
 *   **Architettura Non Bloccante:** Utilizza I/O non bloccante per gestire più client simultaneamente su un singolo thread.
 *   **Multiplexing con `poll()`:** Usa la chiamata di sistema `poll()` per monitorare in modo efficiente più socket (sia di ascolto che dei client).
@@ -120,9 +121,8 @@ Il file `GEMINI.md` contiene una panoramica dettagliata del progetto, la sua arc
 
 Questo progetto è un clone rudimentale di Redis e, come tale, presenta diverse limitazioni e aree di sviluppo futuro:
 
-*   **Implementazione di Key-Value Store:** Il server ora supporta i comandi `PING`, `SET` e `GET`, che interagiscono con una hash map in-memory. L'architettura per aggiungere altri comandi è stata impostata con la funzione `execute_command`. I dati vengono immagazzinati e recuperati correttamente.
-*   **Set di Comandi Limitato:** Attualmente sono implementati solo i comandi `PING`, `SET` e `GET`. Altri comandi standard di Redis (come `DEL`, `EXISTS`, ecc.) devono ancora essere implementati in `execute_command`.
+*   **Implementazione di Key-Value Store:** Il server ora supporta i comandi `PING`, `SET` e `GET`, che interagiscono con una hash map in-memory. L'architettura per aggiungere altri comandi è stata impostata con la funzione `execute_command`. I dati vengono immagazzinati e recuperati correttamente. Il server include anche il supporto per le transazioni `MULTI`/`EXEC`/`DISCARD`.
+*   **Set di Comandi Limitato:** Attualmente sono implementati solo i comandi `PING`, `SET`, `GET`, `MULTI`, `EXEC`, e `DISCARD`. Altri comandi standard di Redis devono ancora essere implementati in `execute_command`.
 *   **Gestione Errori Protocollo:** Sebbene siano state implementate mitigazioni DoS e la gestione degli errori di protocollo sia più robusta, le risposte di errore ai client sono ancora generiche ("-ERR ..."). Una gestione più dettagliata e specifica degli errori sarebbe desiderabile.
 *   **Scalabilità e Robustezza:** Per un utilizzo in produzione, sarebbero necessarie ulteriori ottimizzazioni per la scalabilità (es. thread pool, epoll/kqueue) e una gestione degli errori più granular (es. non abortire per errori non critici).
 *   **Mancanza di Persistenza:** Il server non salva i dati su disco, quindi tutti i dati vengono persi al riavvio.
-*   **Limitata Gestione Pipelining:** L'attuale implementazione del server e del client Python standard non supporta completamente il pipelining complesso di comandi, potendo portare a blocchi o comportamenti inattesi in sequenze rapide di comandi senza attesa di risposta.

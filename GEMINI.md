@@ -31,11 +31,11 @@ These files define and implement the server's core functionality:
 
 ### `src/protocol.h` & `src/protocol.c`
 These files define the communication protocol and its parsing logic:
--   **`Conn` Struct**: Defined in `protocol.h`, this structure holds the state for each client connection, including read/write buffers (`rbuf`, `wbuf`), and the current state of the command parser.
+-   **`Conn` Struct**: Defined in `protocol.h`, this structure holds the state for each client connection, including read/write buffers (`rbuf`, `wbuf`), the current state of the command parser, and transaction state (`in_transaction`, `queued_cmds_head`, `queued_cmds_tail`).
 -   **`ParseState` Enum**: Defines the states for the command parsing state machine (`STATE_PARSE_INIT`, `STATE_PARSE_NUM_ARGS`, `STATE_PARSE_ARG_LEN`, `STATE_PARSE_ARG_PAYLOAD`).
 -   **`consume_buffer()`**: Implemented in `protocol.c`, this function is a state machine that parses incoming raw byte streams from the `Conn`'s read buffer.
-    -   It now interprets a simplified version of the **Redis Serialization Protocol (RESP)**.
-    -   Upon successful parsing, it delegates command execution to `execute_command()`. The commands `PING`, `SET`, and `GET` are supported.
+    -   It now interprets a simplified version of the **Redis Serialization Protocol (RESP)** and correctly handles pipelined commands.
+    -   Upon successful parsing, it delegates command execution to `execute_command()`. The commands `PING`, `SET`, `GET`, `MULTI`, `EXEC`, and `DISCARD` are supported.
 
 ### `src/store.h` & `src/store.c`
 These files define and implement the in-memory key-value store:
@@ -45,7 +45,7 @@ These files define and implement the in-memory key-value store:
 ## Client Interaction (`client.py`)
 
 -   A Python script that demonstrates how to establish a connection with the C server.
--   It now utilizes the standard `redis-py` library for sending commands and receiving responses.
+-   It now utilizes the standard `redis-py` library for sending commands and receiving responses, including testing pipelined commands and `MULTI`/`EXEC` based transactions.
 -   Includes functionality to test basic commands like `PING`, `SET`, and `GET`.
 
 ## Testing (`tests/main_test.c`, `bin/run_tests`)
@@ -55,17 +55,16 @@ These files define and implement the in-memory key-value store:
 -   **Test Cases**: Cover scenarios such as:
     -   Parsing a complete command received at once.
     -   Parsing a command that arrives in fragmented chunks.
-    -   Parsing multiple commands sent simultaneously (pipelining).
+    -   Parsing multiple commands sent simultaneously (fully functional pipelining).
     -   Handling empty commands (0 arguments).
 -   **Build Integration**: The `Makefile` compiles `tests/main_test.c` and `protocol.c` (along with `cmocka` sources) into the `bin/run_tests` executable.
 
 ## Current Limitations / Future Work
 
--   **Set of Commands Limited**: Currently, only `PING`, `SET`, and `GET` commands are fully implemented. Other standard Redis commands (e.g., `DEL`, `EXISTS`) need to be added to `execute_command`.
+-   **Set of Commands Limited**: Currently, `PING`, `SET`, `GET`, `MULTI`, `EXEC`, and `DISCARD` commands are implemented. Other standard Redis commands (e.g., `DEL`, `EXISTS`) need to be added to `execute_command`.
 -   **Error Handling**: While more robust, error responses to clients are still somewhat generic ("-ERR ..."). More detailed and specific error messages would be beneficial.
 -   **Scalability and Robustness**: For production use, further optimizations for scalability (e.g., thread pools, `epoll`/`kqueue` instead of `poll()`) and more granular error management are needed.
 -   **Lack of Persistence**: The server does not save data to disk, meaning all data is lost upon server restart.
--   **Limited Pipelining**: The current server implementation and the standard Python client may not fully support complex command pipelining, potentially leading to deadlocks or unexpected behavior with rapid command sequences without response waiting.
 -   The `fd2conn` array's direct indexing by file descriptor has scalability limitations for very high numbers of connections or large file descriptor values, as noted in `server.c`. A more robust mapping (e.g., hash map) would be required for a production-grade server.
 
 This overview should provide a solid foundation for understanding and further developing the Redis Clone project.
