@@ -244,6 +244,15 @@ static void handle_client_io(int pfd_idx) {
         if (n_read > 0) { // Se `read()` ha letto uno o più byte.
             c->rbuf_size += (size_t)n_read; // Aggiorna la dimensione totale dei dati validi nel buffer.
             printf("Ricevuti %zd bytes dal FD %d\n", n_read, connfd);
+            printf("Dati testuali ricevuti: '");
+            for (size_t i = c->rbuf_size - (size_t)n_read; i < c->rbuf_size; ++i) {
+                if (c->rbuf[i] >= 32 && c->rbuf[i] <= 126) {
+                    printf("%c", c->rbuf[i]);
+                } else {
+                    printf(".");
+                }
+            }
+            printf("'\n");
             c->last_activity_time = get_monotonic_time_ms(); // Aggiorna l'orario di ultima attività.
 
             // Passa il controllo alla funzione `consume_buffer` (definita in `protocol.c`).
