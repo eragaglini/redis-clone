@@ -4,7 +4,8 @@ Questo è un semplice server TCP scritto in C, progettato come un clone basilare
 
 ## Caratteristiche Principali
 
-*   **Protocollo Binario Personalizzato:** Implementa un protocollo di comunicazione binario customizzato per l'interazione client-server, più efficiente dei protocolli testuali per alcuni scopi.
+*   **Implementazione Protocollo RESP (Redis Serialization Protocol):** Il server ora interpreta una versione semplificata del protocollo RESP di Redis, permettendo l'interazione con client standard (es. `redis-py`).
+*   **Supporto Comandi Basilari:** Supporto iniziale per il comando `PING`, con una chiara separazione tra parsing del comando e logica di esecuzione.
 *   **Mitigazioni DOS:** Include meccanismi per prevenire Denial of Service attraverso la validazione dei limiti del protocollo e l'implementazione di timeout per le connessioni inattive.
 *   **Architettura Non Bloccante:** Utilizza I/O non bloccante per gestire più client simultaneamente su un singolo thread.
 *   **Multiplexing con `poll()`:** Usa la chiamata di sistema `poll()` per monitorare in modo efficiente più socket (sia di ascolto che dei client).
@@ -45,10 +46,22 @@ Questo è un semplice server TCP scritto in C, progettato come un clone basilare
     Il server si metterà in ascolto sulla porta 1234.
 
 *   **Avviare il Client di Test:**
-    In un'altra finestra del terminale, puoi usare il client Python fornito per inviare messaggi al server:
-    ```bash
-    python3 client.py
-    ```
+    Il client Python fornito è stato aggiornato per utilizzare la libreria standard `redis-py`.
+    
+    1.  **Crea e attiva un ambiente virtuale (consigliato):**
+        ```bash
+        python3 -m venv .venv
+        source .venv/bin/activate
+        ```
+    2.  **Installa la libreria `redis-py`:**
+        ```bash
+        pip install redis
+        ```
+    3.  **Avvia il client:**
+        ```bash
+        python3 client.py
+        ```
+    Assicurati che il server C sia in esecuzione in un terminale separato.
 
 ### Testing
 
@@ -88,6 +101,8 @@ Il progetto usa CMocka per i test unitari.
 │   └── server.c      # Implementazione del server TCP e event loop
 │   └── protocol.c    # Logica di parsing del protocollo
 │   └── protocol.h    # Definizioni del protocollo e della struttura Conn
+│   └── store.c       # Implementazione della struttura dati del Key-Value store
+│   └── store.h       # Dichiarazione della struttura dati del Key-Value store
 ├── tests/
 │   └── main_test.c   # Unit test per la logica del protocollo
 ├── client.py         # Semplice client Python per testare il server (implementa il protocollo)
@@ -105,8 +120,8 @@ Il file `GEMINI.md` contiene una panoramica dettagliata del progetto, la sua arc
 
 Questo progetto è un clone rudimentale di Redis e, come tale, presenta diverse limitazioni e aree di sviluppo futuro:
 
-*   **Nessuna Implementazione di Key-Value Store:** Attualmente, il server si limita a parsare i comandi e rispondere con un generico "OK". Non esiste una logica per immagazzinare o recuperare dati (`SET`, `GET` non hanno effetti reali). L'aggiunta di una struttura dati (es. hash table) per lo store è il prossimo passo fondamentale.
-*   **Set di Comandi Limitato:** Il server gestisce il parsing per comandi arbitrari, ma non interpreta né esegue comandi specifici di Redis (es. `SET`, `GET`, `PING`, ecc.).
+*   **Implementazione Parziale di Key-Value Store:** Il server ora supporta il parsing del comando `PING` e lo esegue correttamente. L'architettura per aggiungere altri comandi è stata impostata con la funzione `execute_command`. I comandi `SET` e `GET` non hanno ancora effetti reali sulla memoria, ma la struttura per un Key-Value store è stata definita (vedi `src/store.h`).
+*   **Set di Comandi Limitato:** Attualmente è implementato solo il comando `PING`. Altri comandi standard di Redis (come `SET`, `GET`, `DEL`, ecc.) devono ancora essere implementati in `execute_command`.
 *   **Gestione Errori Protocollo:** Sebbene siano state implementate mitigazioni DoS e la gestione degli errori di protocollo sia più robusta, le risposte di errore ai client sono ancora generiche ("-ERR ..."). Una gestione più dettagliata e specifica degli errori sarebbe desiderabile.
 *   **Scalabilità e Robustezza:** Per un utilizzo in produzione, sarebbero necessarie ulteriori ottimizzazioni per la scalabilità (es. thread pool, epoll/kqueue) e una gestione degli errori più granulare (es. non abortire per errori non critici).
 *   **Mancanza di Persistenza:** Il server non salva i dati su disco, quindi tutti i dati vengono persi al riavvio.
