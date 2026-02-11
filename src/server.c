@@ -148,6 +148,7 @@ static void conn_close(int pfd_idx) { // Ora accetta l'indice dell'array poll_ar
     poll_args[pfd_idx].revents = 0; // Azzera i revents.
 
     // Libera la memoria allocata per la struct Conn.
+    free_command_list(c); // Libera la lista di comandi accodati.
     free(c);
 }
 
@@ -213,6 +214,8 @@ static void handle_new_connection(int listen_fd) {
         c->parse_state = RESP_PARSE_TYPE; c->argc = 0; c->current_arg_idx = 0;
         c->resp_expected_len = 0; c->argv = NULL; c->error = 0;
         c->last_activity_time = get_monotonic_time_ms();
+        c->cmd_list_head = NULL;
+        c->cmd_list_tail = NULL;
 
         connections[j] = c; // Mappa la `Conn` struct allo slot `j`.
         conn_put(&poll_args[j], c); // Inizializza lo slot `pollfd` per il client.
@@ -246,16 +249,13 @@ static void handle_client_io(int pfd_idx) {
             // Passa il controllo alla funzione `consume_buffer` (definita in `protocol.c`).
             // Questa funzione si occupa della "logica pura" di parsing dei messaggi e
             // di generazione delle risposte, operando solo sui buffer della `Conn` struct.
-            bool command_parsed = consume_buffer(c);
+            consume_buffer(c);
             // Dopo che consume_buffer ha elaborato il comando e ha preparato
             // una risposta, se un comando completo è stato parsato (command_parsed è true),
-            // dobbiamo liberare la memoria allocata per gli argomenti del comando.
-            if (command_parsed) {
-                 // Un comando completo è stato parsato.
-                 // Esegui il comando e prepara la risposta.
-                 execute_command(c, &g_store);
-                 // Libera gli argomenti del comando.
-                 free_argv(c);
+            // dobbiamo ora eseguire i comandi accodati.
+            if (c->cmd_list_head) {
+                // Esegui tutti i comandi che sono stati parsati e accodati.
+                execute_command(c, &g_store);
             }
         }
 

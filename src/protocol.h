@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h> // Include for bool type
+#include <stdlib.h> // For malloc/free
+
 #include "store.h"
 
 // La dimensione massima per il payload di un singolo messaggio (4KB).
@@ -23,6 +25,13 @@ typedef enum {
     RESP_PARSE_DONE,           // Parsing del comando completato
     RESP_PARSE_ERROR,          // Stato di errore del parser
 } ParseState;
+
+// Rappresenta un singolo comando parsato dal client.
+typedef struct Command {
+    char** argv;          // Array di argomenti della stringa.
+    uint32_t argc;        // Numero di argomenti.
+    struct Command* next; // Puntatore al prossimo comando in una lista collegata.
+} Command;
 
 // La struttura dati che rappresenta lo stato di una singola connessione client.
 typedef struct {
@@ -53,13 +62,20 @@ typedef struct {
     // Ultimo timestamp di attività (millisecondi dall'avvio del server), per gestione timeout.
     uint64_t last_activity_time;
 
+    // Head e tail della lista di comandi parsati ma non ancora eseguiti.
+    Command* cmd_list_head;
+    Command* cmd_list_tail;
+
 } Conn;
 
-// Funzione "pura" per il parsing del buffer e la preparazione della risposta.
-bool consume_buffer(Conn* c);
+// Funzione per il parsing del buffer e la preparazione della risposta.
+void consume_buffer(Conn* c);
 
 // Helper per liberare l'array di argomenti del comando e i suoi contenuti.
 void free_argv(Conn* c);
+
+// Libera tutti i comandi nella lista della connessione.
+void free_command_list(Conn* c);
 
 // Esegue il comando parsato e prepara la risposta.
 void execute_command(Conn* c, HashMap* store);
