@@ -25,22 +25,26 @@ def main():
         print()
 
         # --- TEST 2: SET e GET ---
-        # print("--- Test 2: SET e GET ---")
-        # key = "mykey"
-        # value = "myvalue"
-        # response_set = r.set(key, value)
-        # print(f"SET '{key}' to '{value}' response: {response_set}")
-        # # Il nostro clone restituisce sempre "OK", quindi ci aspettiamo True se decode_responses=True
-        # assert response_set is True
-        # time.sleep(0.5)
+        print("--- Test 2: SET e GET ---")
+        key = "mykey"
+        value = "myvalue"
+        response_set = r.set(key, value)
+        print(f"SET '{key}' to '{value}' response: {response_set}")
+        assert response_set is True
+        time.sleep(0.5)
 
-        # response_get = r.get(key)
-        # print(f"GET '{key}' response: {response_get}")
-        # Attualmente il clone restituisce solo "OK" per ogni comando, non il valore
-        # Quindi questo assert fallirà con il clone attuale.
-        # assert response_get == value 
-        # time.sleep(0.5)
-        # print()
+        response_get = r.get(key)
+        print(f"GET '{key}' response: {response_get}")
+        assert response_get == value 
+        time.sleep(0.5)
+
+        print("--- Test 2.1: GET di chiave non esistente ---")
+        non_existent_key = "nonexistentkey"
+        response_get_non_existent = r.get(non_existent_key)
+        print(f"GET '{non_existent_key}' response: {response_get_non_existent}")
+        assert response_get_non_existent is None # Redis ritorna nil (None in Python) per chiavi non esistenti
+        time.sleep(0.5)
+        print()
         
         # --- TEST 3: Pipeline (semplice) ---
         # print("--- Test 3: Pipeline (semplice) ---")
@@ -50,11 +54,7 @@ def main():
         # pipe.ping()
         # responses_pipeline = pipe.execute()
         # print(f"Pipeline responses: {responses_pipeline}")
-        # Anche qui, con il clone attuale, ci aspettiamo solo [True, 'OK', True] o simili
-        # a seconda di come il clone implementa le risposte per SET/GET.
-        # Attualmente il clone restituisce solo "OK" per qualsiasi comando.
-        # Per ora, verifichiamo solo che ci siano risposte.
-        # assert len(responses_pipeline) == 3
+        # assert responses_pipeline == [True, "value1", True]
         # time.sleep(0.5)
         # print()
 

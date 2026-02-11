@@ -26,7 +26,7 @@ OBJS = $(SRCS:.c=.o)
 TEST_TARGET = bin/run_tests
 # I file oggetto necessari per l'eseguibile di test
 TEST_SRC_FILES = tests/main_test.c
-TEST_OBJS = $(TEST_SRC_FILES:.c=.o) tests_protocol.o # tests_protocol.o è parte della lista degli oggetti di test
+TEST_OBJS = $(TEST_SRC_FILES:.c=.o) tests_protocol.o src/store.o # src/store.o è ora parte della lista degli oggetti di test
 
 # Oggetti di CMocka
 CMOCKA_SRC = lib/cmocka/src/cmocka.c
@@ -57,6 +57,9 @@ src/protocol.o: src/protocol.c
 
 # Regola specifica per protocol.o quando incluso nella compilazione dei test
 tests_protocol.o: src/protocol.c
+	$(CC) $(TEST_CFLAGS) -c $< -o $@
+
+src/store.o: src/store.c
 	$(CC) $(TEST_CFLAGS) -c $< -o $@
 
 

@@ -1,5 +1,5 @@
-#include "server.h"
 #include "protocol.h" // Per la definizione di Conn e la funzione consume_buffer
+#include "store.h"    // Per la definizione e le funzioni della HashMap del Key-Value store
 
 // Librerie standard e di sistema
 // Queste librerie forniscono funzionalità essenziali per lo sviluppo di applicazioni di sistema e di rete in C.
@@ -55,6 +55,10 @@ static Conn* connections[MAX_CONN] = { 0 }; // Mappa l'indice dell'array poll_ar
 // `poll_args`: L'array di `struct pollfd` che viene passato alla funzione di sistema `poll()`.
 // `poll()` monitora gli eventi su ciascun file descriptor listato in questo array.
 static struct pollfd poll_args[MAX_CONN] = { 0 }; // Inizializzato a zero.
+
+// `g_store`: L'istanza globale della HashMap che conterrà i dati chiave-valore del server.
+// Dichiarata static per limitarne la visibilità a questo file.
+static HashMap g_store;
 
 
 // =====================================================================================
@@ -249,7 +253,7 @@ static void handle_client_io(int pfd_idx) {
             if (command_parsed) {
                  // Un comando completo è stato parsato.
                  // Esegui il comando e prepara la risposta.
-                 execute_command(c);
+                 execute_command(c, &g_store);
                  // Libera gli argomenti del comando.
                  free_argv(c);
             }
@@ -316,6 +320,14 @@ static void handle_client_io(int pfd_idx) {
 // Questa funzione è il cuore del modulo `server.c`. Viene chiamata da `main.c`
 // per avviare e gestire l'intero processo del server.
 void server_run(void) {
+    // Inizializza lo store globale del server.
+    store_init(&g_store);
+
+    // CONSIDERAZIONE: In un'applicazione reale, qui ci sarebbe la logica
+    // per gestire la chiusura pulita del server (es. signal handlers)
+    // e per chiamare store_free(&g_store) per liberare la memoria dello store.
+    // Per ora, dato che il loop è infinito, non verrà mai raggiunta.
+
     // ---------- FASE 1: SETUP DEL SOCKET DI ASCOLTO (LISTENING SOCKET) ----------
 
     // 1. `socket()`: Crea un nuovo endpoint di comunicazione (il socket).

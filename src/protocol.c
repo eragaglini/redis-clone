@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <strings.h> // Required for strcasecmp
+#include "store.h"   // Required for HashMap
 
 #ifdef DEBUG
 #define DEBUG_PRINTF(...) printf(__VA_ARGS__)
@@ -42,12 +43,8 @@ static void consume_bytes_from_buffer(Conn* c, size_t bytes) {
 }
 
 // Esegue il comando parsato e prepara la risposta.
-void execute_command(Conn* c) {
+void execute_command(Conn* c, HashMap* store) {
     if (c->argc == 0 || c->argv[0] == NULL) {
-        // Empty command or null command (e.g., from *0\r\n or a null bulk string argument)
-        // For now, respond with a generic OK for empty commands.
-        // In a real Redis, *0\r\n just means an empty array, it's not an executable command.
-        // But our client might send it, so handle gracefully.
         const char* reply = "OK"; 
         int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "+%s\r\n", reply);
         c->wbuf_size = (size_t)len;
@@ -55,23 +52,49 @@ void execute_command(Conn* c) {
         return;
     }
     
-    // Converti il primo argomento (il comando) in maiuscolo per un confronto case-insensitive
     if (strcasecmp(c->argv[0], "PING") == 0) {
-        // Implementazione base di PING
-        // Se PING ha un argomento, dovrebbe rispondere con un Bulk String di quell'argomento
-        if (c->argc > 1 && c->argv[1] != NULL) { // Check for NULL argument
+        if (c->argc > 1 && c->argv[1] != NULL) {
             char* message = c->argv[1];
             int msg_len = strlen(message);
             int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "$%d\r\n%s\r\n", msg_len, message);
             c->wbuf_size = (size_t)len;
         } else {
-            // PING senza argomenti risponde con +PONG
             const char* reply = "PONG";
+            int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "+%s\r\n", reply); // Redis PONG is just +PONG\r\n
+            c->wbuf_size = (size_t)len;
+        }
+    } else if (strcasecmp(c->argv[0], "SET") == 0) {
+        if (c->argc != 3) {
+            conn_error(c, "wrong number of arguments for 'set' command");
+            return;
+        }
+        if (store_set(store, c->argv[1], c->argv[2])) {
+            const char* reply = "OK";
             int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "+%s\r\n", reply);
+            c->wbuf_size = (size_t)len;
+        } else {
+            conn_error(c, "OOM during SET");
+        }
+    } else if (strcasecmp(c->argv[0], "GET") == 0) {
+        if (c->argc != 2) {
+            conn_error(c, "wrong number of arguments for 'get' command");
+            return;
+        }
+        char* value = store_get(store, c->argv[1]);
+        if (value) {
+            int val_len = strlen(value);
+            int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "$%d\r\n%s\r\n", val_len, value);
+            c->wbuf_size = (size_t)len;
+            free(value); // Free the duplicated string from store_get
+        } else {
+            // Key not found, return null bulk string
+            // Redis null bulk string is "$-1\r\n"
+            const char* reply_str = "-1"; 
+            int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "$%s\r\n", reply_str);
             c->wbuf_size = (size_t)len;
         }
     } else {
-        // Comando non riconosciuto, o placeholder per altri comandi
+        // Unknown command
         const char* reply = "OK"; 
         int len = snprintf((char*)c->wbuf, sizeof(c->wbuf), "+%s\r\n", reply);
         c->wbuf_size = (size_t)len;
