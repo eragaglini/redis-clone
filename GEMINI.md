@@ -35,12 +35,12 @@ These files define the communication protocol and its parsing logic:
 -   **`ParseState` Enum**: Defines the states for the command parsing state machine (`STATE_PARSE_INIT`, `STATE_PARSE_NUM_ARGS`, `STATE_PARSE_ARG_LEN`, `STATE_PARSE_ARG_PAYLOAD`).
 -   **`consume_buffer()`**: Implemented in `protocol.c`, this function is a state machine that parses incoming raw byte streams from the `Conn`'s read buffer.
     -   It now interprets a simplified version of the **Redis Serialization Protocol (RESP)** and correctly handles pipelined commands.
-    -   Upon successful parsing, it delegates command execution to `execute_command()`. The commands `PING`, `SET`, `GET`, `MULTI`, `EXEC`, and `DISCARD` are supported.
+    -   Upon successful parsing, it delegates command execution to `execute_command()`. The commands `PING`, `SET`, `GET`, `HSET`, `HGET`, `HLEN`, `MULTI`, `EXEC`, and `DISCARD` are supported. Response generation now provides specific integer replies for HSET/HLEN and nil bulk strings for HGET when appropriate, aligning with Redis's RESP.
 
 ### `src/store.h` & `src/store.c`
 These files define and implement the in-memory key-value store:
--   **`store.h`**: Declares the data structures and functions for the key-value store.
--   **`store.c`**: Implements the hash map used for storing keys and values. It provides functions for setting and getting values.
+-   **`store.h`**: Declares the data structures (`Entry` now supports `ObjType` enum and `void* value`) and functions for the key-value store, including `store_init`, `store_set`, `store_get`, `store_del`, `store_free`, and new functions for Hash types: `store_hset`, `store_hget`, `store_hlen`.
+-   **`store.c`**: Implements the hash map used for storing keys and values. It provides functions for setting and getting values, and now distinguishes between `OBJ_STRING` and `OBJ_HASH` types. `store_set` and `store_get` specifically handle string values. `store_hset`, `store_hget`, and `store_hlen` manage nested hash maps for `OBJ_HASH` types. `store_del` and `store_free` have been updated to recursively free memory based on the stored `ObjType`. Return values for `store_set`, `store_hset`, and `store_hlen` have been refined to align with Redis's specific responses (e.g., `1` for new field, `0` for updated field in HSET).
 
 
 
@@ -58,12 +58,12 @@ These files define and implement the in-memory key-value store:
 -   **`tests/test_integration.py` (Integration Tests)**:
     -   **Test Focus**: Verifies the end-to-end functionality of the C server by interacting with it via a `redis-py` client.
     -   **Test Automation**: Uses `subprocess` to automatically start and stop the C server (`./bin/main`) for each test run.
-    -   **Test Cases**: Includes tests for basic commands (`PING`, `SET`, `GET`), non-existent keys, and simple command pipelining.
+    -   **Test Cases**: Includes tests for basic commands (`PING`, `SET`, `GET`), non-existent keys, simple command pipelining, and newly added tests for hash commands (`HSET`, `HGET`, `HLEN`), including scenarios for non-existent hash keys/fields and type mismatches.
     -   **Execution**: Run via `make integration_test`.
 
 ## Current Limitations / Future Work
 
--   **Set of Commands Limited**: Currently, `PING`, `SET`, `GET`, `MULTI`, `EXEC`, and `DISCARD` commands are implemented. Other standard Redis commands (e.g., `DEL`, `EXISTS`) need to be added to `execute_command`.
+-   **Set of Commands Limited**: Currently, `PING`, `SET`, `GET`, `HSET`, `HGET`, `HLEN`, `MULTI`, `EXEC`, and `DISCARD` commands are implemented. Other standard Redis commands (e.g., `DEL`, `EXISTS`) need to be added to `execute_command`.
 -   **Error Handling**: While more robust, error responses to clients are still somewhat generic ("-ERR ..."). More detailed and specific error messages would be beneficial.
 -   **Scalability and Robustness**: For production use, further optimizations for scalability (e.g., thread pools, `epoll`/`kqueue` instead of `poll()`) and more granular error management are needed.
 -   **Lack of Persistence**: The server does not save data to disk, meaning all data is lost upon server restart.

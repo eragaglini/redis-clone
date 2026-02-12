@@ -4,10 +4,17 @@
 #include <stddef.h> // For size_t
 #include <stdint.h> // For uint32_t
 
+// --- Object Types ---
+typedef enum {
+    OBJ_STRING,
+    OBJ_HASH
+} ObjType;
+
 // --- Hash Map Entry ---
 typedef struct Entry {
     char* key;
-    char* value;
+    void* value; // Can be char* for string or HashMap* for hash
+    ObjType type;
     struct Entry* next; // For collision resolution (separate chaining)
 } Entry;
 
@@ -35,5 +42,17 @@ int store_del(HashMap* map, const char* key);
 
 // Clean up the hash map, freeing all allocated memory.
 void store_free(HashMap* map);
+
+// Set a field-value pair within a hash key. Returns 1 on success, 0 on failure.
+int store_hset(HashMap* map, const char* key, const char* field, const char* value);
+
+// Get the value associated with a field in a hash key. Returns a dynamically allocated string
+// or NULL if the key or field is not found, or if the key is not a hash.
+// The caller is responsible for freeing the string.
+char* store_hget(HashMap* map, const char* key, const char* field);
+
+// Get the number of fields in a hash key. Returns -1 if key is not found or not a hash,
+// otherwise returns the number of fields.
+int store_hlen(HashMap* map, const char* key);
 
 #endif // STORE_H

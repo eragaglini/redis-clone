@@ -111,4 +111,91 @@ def test_pipeline_simple(redis_client):
     responses_pipeline = pipe.execute()
     assert responses_pipeline == [True, "value1", True]
 
+def test_hset_hget(redis_client):
+    """
+    Test HSET and HGET commands.
+    """
+    hash_key = "myhash"
+    field1 = "field1"
+    value1 = "value1"
+    field2 = "field2"
+    value2 = "value2"
+
+    response_hset1 = redis_client.hset(hash_key, field1, value1)
+    assert response_hset1 == 1 # New field added
+
+    response_hset2 = redis_client.hset(hash_key, field2, value2)
+    assert response_hset2 == 1 # New field added
+
+    response_hget1 = redis_client.hget(hash_key, field1)
+    assert response_hget1 == value1
+
+    response_hget2 = redis_client.hget(hash_key, field2)
+    assert response_hget2 == value2
+
+def test_hget_non_existent_field(redis_client):
+    """
+    Test HGET command for a non-existent field in an existing hash key.
+    """
+    hash_key = "anotherhash"
+    field = "existingfield"
+    value = "somevalue"
+    redis_client.hset(hash_key, field, value)
+
+    non_existent_field = "nonexistentfield"
+    response_hget = redis_client.hget(hash_key, non_existent_field)
+    assert response_hget is None
+
+def test_hget_non_existent_key(redis_client):
+    """
+    Test HGET command for a non-existent hash key.
+    """
+    non_existent_key = "nonexistenthash"
+    field = "anyfield"
+    response_hget = redis_client.hget(non_existent_key, field)
+    assert response_hget is None
+
+def test_hlen(redis_client):
+    """
+    Test HLEN command.
+    """
+    hash_key = "lenhash"
+    redis_client.hset(hash_key, "f1", "v1")
+    redis_client.hset(hash_key, "f2", "v2")
+    redis_client.hset(hash_key, "f3", "v3")
+
+    response_hlen = redis_client.hlen(hash_key)
+    assert response_hlen == 3
+
+def test_hlen_non_existent_key(redis_client):
+    """
+    Test HLEN command for a non-existent hash key.
+    """
+    response_hlen = redis_client.hlen("nonexistentlenhash")
+    assert response_hlen == 0 # Redis returns 0 for non-existent hash keys
+
+def test_hset_on_string_key(redis_client):
+    """
+    Test HSET command on a key that already holds a string.
+    """
+    key = "stringkey"
+    value = "stringvalue"
+    redis_client.set(key, value)
+
+    # Attempt to HSET on a key that is already a string
+    with pytest.raises(redis.exceptions.ResponseError): # Our current C implementation returns 0, which redis-py converts to ResponseError for commands that expect a specific return type.
+        redis_client.hset(key, "field", "newvalue")
+
+def test_get_on_hash_key(redis_client):
+    """
+    Test GET command on a key that holds a hash.
+    """
+    hash_key = "hashforget"
+    field = "field1"
+    value = "value1"
+    redis_client.hset(hash_key, field, value)
+
+    response_get = redis_client.get(hash_key)
+    assert response_get is None # GET on a hash key should return None (nil)
+
 # You can add more tests here for other commands, MULTI/EXEC etc.

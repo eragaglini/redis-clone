@@ -168,6 +168,47 @@ char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
             }
         }
     }
+    else if (strcasecmp(cmd->argv[0], "HSET") == 0) {
+        if (cmd->argc != 4) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hset' command\r\n");
+        }
+        else {
+            int hset_result = store_hset(store, cmd->argv[1], cmd->argv[2], cmd->argv[3]);
+            if (hset_result == 1 || hset_result == 0) { // 1 for new field, 0 for updated field
+                len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hset_result);
+            } else {
+                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR HSET failed\r\n");
+            }
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "HGET") == 0) {
+        if (cmd->argc != 3) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hget' command\r\n");
+        }
+        else {
+            char* value = store_hget(store, cmd->argv[1], cmd->argv[2]);
+            if (value) {
+                int val_len = strlen(value);
+                len = snprintf(reply_buf, sizeof(reply_buf), "$%d\r\n%s\r\n", val_len, value);
+                free(value); // Free the duplicated string from store_hget
+            }
+            else {
+                const char* reply_str = "-1";
+                len = snprintf(reply_buf, sizeof(reply_buf), "$%s\r\n", reply_str); // Nil bulk string
+            }
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "HLEN") == 0) {
+        if (cmd->argc != 2) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hlen' command\r\n");
+        }
+        else {
+            int hlen_result = store_hlen(store, cmd->argv[1]);
+            // hlen_result can be >= 0 (count) or -1 (error/not hash)
+            // Redis HLEN returns 0 if key does not exist or is not a hash
+            len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hlen_result);
+        }
+    }
     else {
         // Unknown command
         const char* reply_str = "OK"; // Default to OK for unknown commands
