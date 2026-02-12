@@ -8,11 +8,25 @@ This document provides a high-level overview of the "Redis Clone" project, which
 -   **`Makefile`**: Manages the build process, including compilation with `gcc` and linking of test components, and supports debug mode. It also includes targets for running unit and integration tests.
 -   **`README.md`**: Project README.
 -   **`bin/`**: Contains compiled executables (`main` for the server, `run_tests` for the C unit test suite).
+-   **`Doxyfile`**: Configuration file for Doxygen documentation generation.
+-   **`html/`**: (Ignored by Git) Directory containing the generated Doxygen HTML documentation.
 -   **`include/`**: Empty, intended for public headers.
 -   **`lib/cmocka/`**: Submodule containing the `cmocka` unit testing framework.
 -   **`src/`**: Contains the core C source files for the server.
+    -   **`src/mainpage.dox`**: Doxygen file defining the main page content for the generated documentation.
 -   **`tests/`**: Contains unit tests for the server components (`tests/main_test.c`) and Python-based integration tests (`tests/test_integration.py`).
 
+## Doxygen Documentation
+
+The project utilizes Doxygen for automatic code documentation generation.
+
+-   **`Doxyfile`**: This configuration file orchestrates Doxygen's behavior. Key configurations include:
+    -   `PROJECT_NAME`, `PROJECT_BRIEF`: Define the project's identity in the documentation.
+    -   `INPUT`: Explicitly lists directories (`src/`, `include/`) and the `src/mainpage.dox` file to be processed.
+    -   `EXCLUDE`, `EXCLUDE_PATTERNS`: Crucially, `lib/cmocka` and all its contents are excluded to prevent external library documentation from interfering with the project's own documentation.
+    -   `USE_MDFILE_AS_MAINPAGE = NO`: Ensures that our custom `src/mainpage.dox` (which contains the `\mainpage` command) is used as the main documentation page, rather than any other Markdown file.
+    -   `HAVE_DOT = NO`: Disables graph generation (call graphs, include graphs, etc.) by Doxygen, as it depends on Graphviz (`dot` command) which might not always be installed. This prevents errors during documentation generation if Graphviz is absent.
+-   **`src/mainpage.dox`**: This special file defines the content for the project's main documentation page. It includes an introduction, features list, usage instructions, and project structure overview using Doxygen commands like `@mainpage`, `@section`, and `@ref`.
 
 ## Core Components
 
@@ -48,12 +62,11 @@ These files define and implement the in-memory key-value store:
 
 -   **Frameworks**: The project uses `cmocka` for C unit testing and `pytest` for Python-based integration testing.
 -   **`tests/main_test.c` (Unit Tests)**:
-    -   **Test Focus**: Primarily targets the `consume_buffer` function in `protocol.c`.
-    -   **Test Cases**: Cover scenarios such as:
-        -   Parsing a complete command received at once.
-        -   Parsing a command that arrives in fragmented chunks.
-        -   Parsing multiple commands sent simultaneously (fully functional pipelining).
-        -   Handling empty commands (0 arguments).
+    -   **Test Focus**: Contains unit tests for protocol parsing (`consume_buffer`), command reply generation (`get_command_reply`), and command execution (`execute_command`).
+    -   **Test Cases**:
+        -   Parsing commands in various scenarios (full, chunks, pipelining, empty).
+        -   `get_command_reply` verifies correct RESP formatting for all supported commands (`PING`, `SET`, `GET`, `HSET`, `HGET`, `HLEN`, `HDEL`, `HGETALL`, `DEL`, `EXISTS`, `TYPE`) including success, not found, wrong type, and error scenarios.
+        -   `execute_command` verifies command dispatch, transaction handling (`MULTI`/`EXEC`/`DISCARD`), and correct reply accumulation.
     -   **Build Integration**: The `Makefile` compiles `tests/main_test.c` and `protocol.c` (along with `cmocka` sources) into the `bin/run_tests` executable, run via `make test`.
 -   **`tests/test_integration.py` (Integration Tests)**:
     -   **Test Focus**: Verifies the end-to-end functionality of the C server by interacting with it via a `redis-py` client.
@@ -63,7 +76,7 @@ These files define and implement the in-memory key-value store:
 
 ## Current Limitations / Future Work
 
--   **Set of Commands Limited**: Currently, `PING`, `SET`, `GET`, `HSET`, `HGET`, `HLEN`, `MULTI`, `EXEC`, and `DISCARD` commands are implemented. Other standard Redis commands (e.g., `DEL`, `EXISTS`) need to be added to `execute_command`.
+-   **Set of Commands Limited**: Currently, `PING`, `SET`, `GET`, `HSET`, `HGET`, `HLEN`, `HDEL`, `HGETALL`, `DEL`, `EXISTS`, `TYPE`, `MULTI`, `EXEC`, and `DISCARD` commands are implemented. Other standard Redis commands (e.g., `LPUSH`, `SADD`) need to be added to `execute_command`.
 -   **Error Handling**: While more robust, error responses to clients are still somewhat generic ("-ERR ..."). More detailed and specific error messages would be beneficial.
 -   **Scalability and Robustness**: For production use, further optimizations for scalability (e.g., thread pools, `epoll`/`kqueue` instead of `poll()`) and more granular error management are needed.
 -   **Lack of Persistence**: The server does not save data to disk, meaning all data is lost upon server restart.

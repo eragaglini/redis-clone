@@ -88,6 +88,17 @@ Il progetto usa CMocka per i test unitari e Pytest per i test di integrazione.
     ./bin/main
     ```
 
+## Documentazione Doxygen
+
+Il progetto include la documentazione del codice generata automaticamente con Doxygen.
+
+*   **Generare la Documentazione:**
+    ```bash
+    make doc
+    ```
+    Questo comando genererà i file HTML della documentazione nella directory `html/`. Per visualizzarla, apri `html/index.html` nel tuo browser.
+    Nota: Per la generazione dei grafici (call graph, include graph, etc.), è necessario avere installato Graphviz (`dot` command).
+
 ## Struttura del Progetto
 
 ```
@@ -96,6 +107,7 @@ Il progetto usa CMocka per i test unitari e Pytest per i test di integrazione.
 ├── lib/              # Librerie di terze parti (CMocka)
 ├── src/
 │   └── main.c        # Codice sorgente principale del server
+│   └── mainpage.dox  # Pagina principale della documentazione Doxygen
 │   └── server.c      # Implementazione del server TCP e event loop
 │   └── protocol.c    # Logica di parsing del protocollo
 │   └── protocol.h    # Definizioni del protocollo e della struttura Conn
@@ -107,6 +119,7 @@ Il progetto usa CMocka per i test unitari e Pytest per i test di integrazione.
 ├── requirements.txt  # Dipendenze Python (pytest, redis-py)
 ├── Makefile          # Regole per la compilazione, l'esecuzione e i test
 ├── .gitignore        # File e directory da ignorare con git
+├── Doxyfile          # File di configurazione per Doxygen
 ├── README.md         # Questo file
 └── GEMINI.md         # File di contesto per l'agente Gemini CLI
 ```

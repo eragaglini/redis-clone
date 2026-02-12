@@ -77,6 +77,13 @@ $(TEST_TARGET): $(TEST_OBJS) $(CMOCKA_OBJ)
 	# Usa TEST_CFLAGS per il linking dei test
 	$(CC) $(TEST_CFLAGS) -o $(TEST_TARGET) $(TEST_OBJS) $(CMOCKA_OBJ)
 
+# --- Documentation ---
+doc:
+	@echo "Generating Doxygen documentation..."
+	doxygen Doxyfile
+	@echo "Opening documentation..."
+	open html/index.html
+
 # --- Commands ---
 run: all
 	./$(TARGET)
@@ -87,3 +94,4 @@ integration_test: all
 
 clean:
 	rm -f src/*.o tests/*.o lib/cmocka/src/*.o $(TARGET) $(TEST_TARGET)
+	rm -rf html latex

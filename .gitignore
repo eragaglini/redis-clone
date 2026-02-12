@@ -19,3 +19,7 @@ lib/cmocka/src/*.o
 *~
 /.venv/
 __pycache__/
+
+# Doxygen output
+html/
+latex/

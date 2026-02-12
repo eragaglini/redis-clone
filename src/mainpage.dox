@@ -1,0 +1,24 @@
+/**
+ * @mainpage Redis Clone in C
+ *
+ * @section intro Introduzione
+ * Questo è un'implementazione rudimentale di un key-value store ispirato a Redis,
+ * scritto in C. Il progetto mira a esplorare i concetti di programmazione di rete
+ * non bloccante, protocolli personalizzati e gestione efficiente dei dati in memoria.
+ *
+ * @section features Caratteristiche Implementate
+ * - Supporto per il protocollo RESP (Redis Serialization Protocol).
+ * - Operazioni su stringhe: `SET`, `GET`.
+ * - Operazioni su hash: `HSET`, `HGET`, `HLEN`, `HDEL`, `HGETALL`.
+ * - Operazioni generiche su chiavi: `DEL`, `EXISTS`, `TYPE`.
+ * - Transazioni: `MULTI`, `EXEC`, `DISCARD`.
+ * - Architettura non bloccante con `poll()`.
+ * - Gestione del pipelining dei comandi.
+ * - Unit test e test di integrazione.
+ *
+ * @section usage Utilizzo
+ * Per compilare e avviare il server, fare riferimento al file @ref README.md.
+ *
+ * @section structure Struttura del Progetto
+ * La struttura delle directory e dei componenti principali è dettagliata in @ref GEMINI.md.
+ */
