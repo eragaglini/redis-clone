@@ -198,4 +198,186 @@ def test_get_on_hash_key(redis_client):
     response_get = redis_client.get(hash_key)
     assert response_get is None # GET on a hash key should return None (nil)
 
+    response_get = redis_client.get(hash_key)
+    assert response_get is None # GET on a hash key should return None (nil)
+
+def test_hdel_field(redis_client):
+    """
+    Test HDEL command for an existing field.
+    """
+    hash_key = "hdelhash"
+    field1 = "f1"
+    field2 = "f2"
+    redis_client.hset(hash_key, field1, "v1")
+    redis_client.hset(hash_key, field2, "v2")
+    assert redis_client.hlen(hash_key) == 2
+
+    response_hdel = redis_client.hdel(hash_key, field1)
+    assert response_hdel == 1 # 1 field deleted
+    assert redis_client.hlen(hash_key) == 1
+    assert redis_client.hget(hash_key, field1) is None
+
+    response_hdel_again = redis_client.hdel(hash_key, field1)
+    assert response_hdel_again == 0 # Field already deleted
+
+def test_hdel_non_existent_field(redis_client):
+    """
+    Test HDEL command for a non-existent field in an existing hash.
+    """
+    hash_key = "hdelnonexistent"
+    redis_client.hset(hash_key, "f1", "v1")
+    assert redis_client.hlen(hash_key) == 1
+
+    response_hdel = redis_client.hdel(hash_key, "nonexistentfield")
+    assert response_hdel == 0 # 0 fields deleted
+    assert redis_client.hlen(hash_key) == 1 # Hash size should not change
+
+def test_hdel_non_existent_key(redis_client):
+    """
+    Test HDEL command for a non-existent hash key.
+    """
+    response_hdel = redis_client.hdel("nonexistentkey", "anyfield")
+    assert response_hdel == 0 # 0 fields deleted
+
+def test_hdel_on_string_key(redis_client):
+    """
+    Test HDEL command on a key that holds a string.
+    """
+    key = "stringkeyhdel"
+    redis_client.set(key, "somevalue")
+
+    with pytest.raises(redis.exceptions.ResponseError):
+        redis_client.hdel(key, "field")
+
+def test_hgetall_basic(redis_client):
+    """
+    Test HGETALL command on a hash with multiple fields.
+    """
+    hash_key = "hgetallhash"
+    redis_client.hset(hash_key, "f1", "v1")
+    redis_client.hset(hash_key, "f2", "v2")
+    redis_client.hset(hash_key, "f3", "v3")
+
+    response_hgetall = redis_client.hgetall(hash_key)
+    expected = {"f1": "v1", "f2": "v2", "f3": "v3"}
+    assert response_hgetall == expected
+
+def test_hgetall_empty_hash(redis_client):
+    """
+    Test HGETALL command on an empty hash.
+    """
+    hash_key = "emptyhash"
+    # Create an empty hash by HSETting and then HDELing all fields
+    redis_client.hset(hash_key, "temp_field", "temp_value")
+    redis_client.hdel(hash_key, "temp_field")
+
+    response_hgetall = redis_client.hgetall(hash_key)
+    assert response_hgetall == {}
+
+def test_hgetall_non_existent_key(redis_client):
+    """
+    Test HGETALL command on a non-existent key.
+    """
+    response_hgetall = redis_client.hgetall("nonexistenthgetallkey")
+    assert response_hgetall == {}
+
+def test_hgetall_on_string_key(redis_client):
+    """
+    Test HGETALL command on a key that holds a string.
+    """
+    key = "stringkeyhgetall"
+    redis_client.set(key, "somevalue")
+
+    with pytest.raises(redis.exceptions.ResponseError):
+        redis_client.hgetall(key)
+
+    with pytest.raises(redis.exceptions.ResponseError):
+        redis_client.hgetall(key)
+
+def test_del_single_key(redis_client):
+    """
+    Test DEL command for a single existing key.
+    """
+    key = "keytodel"
+    redis_client.set(key, "value")
+    assert redis_client.exists(key) == 1
+
+    deleted_count = redis_client.delete(key)
+    assert deleted_count == 1
+    assert redis_client.exists(key) == 0
+
+def test_del_multiple_keys(redis_client):
+    """
+    Test DEL command for multiple keys (string and hash).
+    """
+    key1 = "key1todel"
+    key2 = "key2todel"
+    hash_key = "hashkeytodel"
+
+    redis_client.set(key1, "value1")
+    redis_client.hset(hash_key, "f1", "v1")
+    redis_client.set(key2, "value2")
+
+    assert redis_client.exists(key1) == 1
+    assert redis_client.exists(hash_key) == 1
+    assert redis_client.exists(key2) == 1
+
+    deleted_count = redis_client.delete(key1, hash_key, key2)
+    assert deleted_count == 3
+    assert redis_client.exists(key1) == 0
+    assert redis_client.exists(hash_key) == 0
+    assert redis_client.exists(key2) == 0
+
+def test_del_non_existent_key(redis_client):
+    """
+    Test DEL command for a non-existent key.
+    """
+    deleted_count = redis_client.delete("nonexistentkeydel")
+    assert deleted_count == 0
+
+def test_del_mix_existent_non_existent(redis_client):
+    """
+    Test DEL command for a mix of existent and non-existent keys.
+    """
+    key1 = "mixkey1"
+    key2 = "mixkey2"
+    redis_client.set(key1, "val1")
+
+    deleted_count = redis_client.delete(key1, "nonexistentmixkey", key2)
+    assert deleted_count == 1 # Only key1 should be deleted
+    assert redis_client.exists(key1) == 0
+    assert redis_client.exists(key2) == 0 # Was never set
+
+def test_exists_single_key(redis_client):
+    """
+    Test EXISTS command for an existing and non-existent key.
+    """
+    key = "existkey"
+    redis_client.set(key, "value")
+
+    assert redis_client.exists(key) == 1
+    assert redis_client.exists("nonexistentexistkey") == 0
+
+def test_type_string(redis_client):
+    """
+    Test TYPE command for a string key.
+    """
+    key = "stringtypekey"
+    redis_client.set(key, "value")
+    assert redis_client.type(key) == "string"
+
+def test_type_hash(redis_client):
+    """
+    Test TYPE command for a hash key.
+    """
+    key = "hashtypekey"
+    redis_client.hset(key, "field", "value")
+    assert redis_client.type(key) == "hash"
+
+def test_type_non_existent(redis_client):
+    """
+    Test TYPE command for a non-existent key.
+    """
+    assert redis_client.type("nonexistenttypekey") == "none"
+
 # You can add more tests here for other commands, MULTI/EXEC etc.

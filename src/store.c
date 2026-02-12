@@ -104,7 +104,7 @@ char* store_get(HashMap* map, const char* key) {
     return NULL; // Key not found
 }
 
-int store_del(HashMap* map, const char* key) {
+int store_delete_entry_from_map(HashMap* map, const char* key) {
     if (!map || !key) return 0;
 
     uint32_t index = get_bucket_index(key);
@@ -255,6 +255,182 @@ int store_hlen(HashMap* map, const char* key) {
         current = current->next;
     }
     return 0; // Key not found, return 0 as per Redis HLEN behavior
+}
+
+int store_hdel(HashMap* map, const char* key, const char* field) {
+    if (!map || !key || !field) return -1; // Invalid input, return -1 for error
+
+    uint32_t index = get_bucket_index(key);
+    Entry* current = map->buckets[index];
+    Entry* main_entry = NULL;
+
+    // Find the main key entry
+    while (current) {
+        if (strcmp(current->key, key) == 0) {
+            main_entry = current;
+            break;
+        }
+        current = current->next;
+    }
+
+    if (!main_entry) {
+        // Key not found
+        return 0;
+    }
+
+    if (main_entry->type != OBJ_HASH) {
+        // Key is not a hash
+        return -1; // Indicate wrong type
+    }
+
+    // Key is a hash, call store_delete_entry_from_map on the inner hash map
+    return store_delete_entry_from_map((HashMap*)main_entry->value, field);
+}
+
+int store_hgetall(HashMap* map, const char* key, char*** out_results, size_t* out_count) {
+    if (!map || !key || !out_results || !out_count) return -1; // Invalid input
+
+    uint32_t index = get_bucket_index(key);
+    Entry* current = map->buckets[index];
+    Entry* main_entry = NULL;
+
+    // Find the main key entry
+    while (current) {
+        if (strcmp(current->key, key) == 0) {
+            main_entry = current;
+            break;
+        }
+        current = current->next;
+    }
+
+    if (!main_entry) {
+        // Key not found, consistent with Redis HGETALL returning an empty array
+        *out_results = NULL;
+        *out_count = 0;
+        return 0;
+    }
+
+    if (main_entry->type != OBJ_HASH) {
+        // Key found but is not a hash
+        *out_results = NULL;
+        *out_count = 0;
+        return -1; // Indicate wrong type
+    }
+
+    HashMap* inner_map = (HashMap*)main_entry->value;
+    int num_fields = count_hash_entries(inner_map);
+
+    if (num_fields == 0) {
+        *out_results = NULL;
+        *out_count = 0;
+        return 0; // Empty hash, but valid
+    }
+
+    // Allocate array for results (field1, value1, field2, value2, ...)
+    *out_count = (size_t)num_fields * 2;
+    *out_results = (char**)malloc(sizeof(char*) * (*out_count));
+    if (!*out_results) {
+        *out_count = 0;
+        return -1; // OOM
+    }
+
+    size_t result_idx = 0;
+    for (int i = 0; i < HASH_MAP_SIZE; ++i) {
+        Entry* inner_current = inner_map->buckets[i];
+        while (inner_current) {
+            if (result_idx < *out_count) {
+                (*out_results)[result_idx++] = strdup(inner_current->key);
+                if (!(*out_results)[result_idx - 1]) {
+                    // OOM during strdup, clean up and return error
+                    for (size_t j = 0; j < result_idx - 1; ++j) {
+                        free((*out_results)[j]);
+                    }
+                    free(*out_results);
+                    *out_results = NULL;
+                    *out_count = 0;
+                    return -1;
+                }
+            } else {
+                // Should not happen if num_fields was counted correctly
+                // but as a safeguard, break and indicate error
+                for (size_t j = 0; j < result_idx; ++j) {
+                    free((*out_results)[j]);
+                }
+                free(*out_results);
+                *out_results = NULL;
+                *out_count = 0;
+                return -1;
+            }
+
+            if (result_idx < *out_count) {
+                // Note: inner_current->value is a char* because the inner map stores strings
+                (*out_results)[result_idx++] = strdup((char*)inner_current->value);
+                if (!(*out_results)[result_idx - 1]) {
+                    // OOM during strdup, clean up and return error
+                    for (size_t j = 0; j < result_idx - 1; ++j) {
+                        free((*out_results)[j]);
+                    }
+                    free(*out_results);
+                    *out_results = NULL;
+                    *out_count = 0;
+                    return -1;
+                }
+            } else {
+                // Safeguard
+                for (size_t j = 0; j < result_idx; ++j) {
+                    free((*out_results)[j]);
+                }
+                free(*out_results);
+                *out_results = NULL;
+                *out_count = 0;
+                return -1;
+            }
+            inner_current = inner_current->next;
+        }
+    }
+    return 0; // Success
+}
+
+int store_del(HashMap* map, const char** keys, size_t num_keys) {
+    if (!map || !keys || num_keys == 0) return 0;
+
+    int deleted_count = 0;
+    for (size_t i = 0; i < num_keys; ++i) {
+        if (store_delete_entry_from_map(map, keys[i])) {
+            deleted_count++;
+        }
+    }
+    return deleted_count;
+}
+
+int store_exists(HashMap* map, const char* key) {
+    if (!map || !key) return 0;
+
+    uint32_t index = get_bucket_index(key);
+    Entry* current = map->buckets[index];
+
+    while (current) {
+        if (strcmp(current->key, key) == 0) {
+            return 1; // Key found
+        }
+        current = current->next;
+    }
+    return 0; // Key not found
+}
+
+ObjType store_type(HashMap* map, const char* key) {
+    if (!map || !key) return (ObjType)-1; // Indicate not found/error
+
+    uint32_t index = get_bucket_index(key);
+    Entry* current = map->buckets[index];
+
+    while (current) {
+        if (strcmp(current->key, key) == 0) {
+            return current->type;
+        }
+        current = current->next;
+    }
+    return (ObjType)-1; // Key not found
 }
 
 void store_free(HashMap* map) {

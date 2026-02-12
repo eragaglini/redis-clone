@@ -35,12 +35,12 @@ These files define the communication protocol and its parsing logic:
 -   **`ParseState` Enum**: Defines the states for the command parsing state machine (`STATE_PARSE_INIT`, `STATE_PARSE_NUM_ARGS`, `STATE_PARSE_ARG_LEN`, `STATE_PARSE_ARG_PAYLOAD`).
 -   **`consume_buffer()`**: Implemented in `protocol.c`, this function is a state machine that parses incoming raw byte streams from the `Conn`'s read buffer.
     -   It now interprets a simplified version of the **Redis Serialization Protocol (RESP)** and correctly handles pipelined commands.
-    -   Upon successful parsing, it delegates command execution to `execute_command()`. The commands `PING`, `SET`, `GET`, `HSET`, `HGET`, `HLEN`, `MULTI`, `EXEC`, and `DISCARD` are supported. Response generation now provides specific integer replies for HSET/HLEN and nil bulk strings for HGET when appropriate, aligning with Redis's RESP.
+    -   Upon successful parsing, it delegates command execution to `execute_command()`. The commands `PING`, `SET`, `GET`, `HSET`, `HGET`, `HLEN`, `HDEL`, `HGETALL`, `DEL`, `EXISTS`, `TYPE`, `MULTI`, `EXEC`, and `DISCARD` are supported. Response generation now provides specific integer replies for HSET/HLEN/DEL/EXISTS and nil bulk strings for HGET when appropriate, aligning with Redis's RESP. TYPE command returns string replies like "+string", "+hash", "+none".
 
 ### `src/store.h` & `src/store.c`
 These files define and implement the in-memory key-value store:
--   **`store.h`**: Declares the data structures (`Entry` now supports `ObjType` enum and `void* value`) and functions for the key-value store, including `store_init`, `store_set`, `store_get`, `store_del`, `store_free`, and new functions for Hash types: `store_hset`, `store_hget`, `store_hlen`.
--   **`store.c`**: Implements the hash map used for storing keys and values. It provides functions for setting and getting values, and now distinguishes between `OBJ_STRING` and `OBJ_HASH` types. `store_set` and `store_get` specifically handle string values. `store_hset`, `store_hget`, and `store_hlen` manage nested hash maps for `OBJ_HASH` types. `store_del` and `store_free` have been updated to recursively free memory based on the stored `ObjType`. Return values for `store_set`, `store_hset`, and `store_hlen` have been refined to align with Redis's specific responses (e.g., `1` for new field, `0` for updated field in HSET).
+-   **`store.h`**: Declares the data structures (`Entry` now supports `ObjType` enum and `void* value`) and functions for the key-value store, including `store_init`, `store_set`, `store_get`, `store_delete_entry_from_map` (renamed from `store_del` for internal use), `store_free`, and new functions for Hash types: `store_hset`, `store_hget`, `store_hlen`, `store_hdel`, `store_hgetall`. Also includes new top-level key commands: `store_del` (for multiple keys), `store_exists`, and `store_type`.
+-   **`store.c`**: Implements the hash map used for storing keys and values. It provides functions for setting and getting values, and now distinguishes between `OBJ_STRING` and `OBJ_HASH` types. `store_set` and `store_get` specifically handle string values. `store_hset`, `store_hget`, `store_hlen`, `store_hdel`, `store_hgetall` manage nested hash maps for `OBJ_HASH` types. `store_delete_entry_from_map` is the internal function for removing an entry from any `HashMap`. The new top-level `store_del` command can remove multiple keys. `store_exists` checks for key presence, and `store_type` returns the stored object type. `store_free` has been updated to recursively free memory based on the stored `ObjType`. Return values for functions have been refined to align with Redis's specific responses.
 
 
 
@@ -58,7 +58,7 @@ These files define and implement the in-memory key-value store:
 -   **`tests/test_integration.py` (Integration Tests)**:
     -   **Test Focus**: Verifies the end-to-end functionality of the C server by interacting with it via a `redis-py` client.
     -   **Test Automation**: Uses `subprocess` to automatically start and stop the C server (`./bin/main`) for each test run.
-    -   **Test Cases**: Includes tests for basic commands (`PING`, `SET`, `GET`), non-existent keys, simple command pipelining, and newly added tests for hash commands (`HSET`, `HGET`, `HLEN`), including scenarios for non-existent hash keys/fields and type mismatches.
+    -   **Test Cases**: Includes tests for basic commands (`PING`, `SET`, `GET`), non-existent keys, simple command pipelining, hash commands (`HSET`, `HGET`, `HLEN`, `HDEL`, `HGETALL`), including scenarios for non-existent hash keys/fields and type mismatches. New tests cover generic key commands `DEL`, `EXISTS`, and `TYPE` for various key types and existence.
     -   **Execution**: Run via `make integration_test`.
 
 ## Current Limitations / Future Work

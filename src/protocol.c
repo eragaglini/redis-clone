@@ -209,6 +209,94 @@ char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
             len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hlen_result);
         }
     }
+    else if (strcasecmp(cmd->argv[0], "HDEL") == 0) {
+        if (cmd->argc != 3) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hdel' command\r\n");
+        }
+        else {
+            int hdel_result = store_hdel(store, cmd->argv[1], cmd->argv[2]);
+            if (hdel_result == 1 || hdel_result == 0) { // 1 for deleted, 0 for not found
+                len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hdel_result);
+            } else if (hdel_result == -1) { // Wrong type or other error
+                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+            } else {
+                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR HDEL failed\r\n");
+            }
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "HGETALL") == 0) {
+        if (cmd->argc != 2) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hgetall' command\r\n");
+        }
+        else {
+            char** results = NULL;
+            size_t count = 0;
+            int hgetall_status = store_hgetall(store, cmd->argv[1], &results, &count);
+
+            if (hgetall_status == 0) { // Success
+                // Format as RESP array: *<num_elements>\r\n$<len1>\r\n<val1>\r\n...
+                size_t total_resp_len = 0;
+                // Calculate length needed for all elements
+                for (size_t i = 0; i < count; ++i) {
+                    total_resp_len += snprintf(NULL, 0, "$%zu\r\n%s\r\n", strlen(results[i]), results[i]);
+                }
+                // Add length for array header (*<count>\r\n) and null terminator
+                total_resp_len += snprintf(NULL, 0, "*%zu\r\n", count);
+
+                char* resp_str = (char*)malloc(total_resp_len + 1); // +1 for null terminator
+                if (!resp_str) {
+                    len = snprintf(reply_buf, sizeof(reply_buf), "-ERR OOM during HGETALL reply construction\r\n");
+                } else {
+                    int offset = snprintf(resp_str, total_resp_len + 1, "*%zu\r\n", count);
+                    for (size_t i = 0; i < count; ++i) {
+                        offset += snprintf(resp_str + offset, total_resp_len + 1 - offset, "$%zu\r\n%s\r\n", strlen(results[i]), results[i]);
+                        free(results[i]); // Free individual string
+                    }
+                    free(results); // Free array of pointers
+                    strncpy(reply_buf, resp_str, sizeof(reply_buf) - 1);
+                    reply_buf[sizeof(reply_buf) - 1] = '\0'; // Ensure null termination
+                    len = strlen(reply_buf);
+                    free(resp_str); // Free the dynamically allocated RESP string
+                }
+            } else if (hgetall_status == -1) { // Key not found or not a hash (wrong type)
+                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+            }
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "DEL") == 0) {
+        if (cmd->argc < 2) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'del' command\r\n");
+        }
+        else {
+            // cmd->argv[1] is the first key, cmd->argc - 1 is the number of keys
+            int deleted_count = store_del(store, (const char**)&cmd->argv[1], cmd->argc - 1);
+            len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", deleted_count);
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "EXISTS") == 0) {
+        if (cmd->argc != 2) { // Implementing for single key EXISTS for now
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'exists' command\r\n");
+        }
+        else {
+            int exists_result = store_exists(store, cmd->argv[1]);
+            len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", exists_result);
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "TYPE") == 0) {
+        if (cmd->argc != 2) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'type' command\r\n");
+        }
+        else {
+            ObjType type = store_type(store, cmd->argv[1]);
+            if (type == OBJ_STRING) {
+                len = snprintf(reply_buf, sizeof(reply_buf), "+string\r\n");
+            } else if (type == OBJ_HASH) {
+                len = snprintf(reply_buf, sizeof(reply_buf), "+hash\r\n");
+            } else { // (ObjType)-1 for not found
+                len = snprintf(reply_buf, sizeof(reply_buf), "+none\r\n");
+            }
+        }
+    }
     else {
         // Unknown command
         const char* reply_str = "OK"; // Default to OK for unknown commands
