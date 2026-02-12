@@ -27,6 +27,9 @@ static int setup(void** state) {
     test_state->conn->parse_state = RESP_PARSE_TYPE;
     test_state->conn->cmd_list_head = NULL;
     test_state->conn->cmd_list_tail = NULL;
+    test_state->conn->wbuf_size = 0; // Clear wbuf size
+    memset(test_state->conn->wbuf, 0, sizeof(test_state->conn->wbuf)); // Clear wbuf content
+
 
     test_state->store = (HashMap*)calloc(1, sizeof(HashMap));
     assert_non_null(test_state->store);
@@ -42,6 +45,7 @@ static int teardown(void** state) {
     if (test_state) {
         if (test_state->conn) {
             free_command_list(test_state->conn); // Pulisce la lista di comandi
+            free_queued_command_list(test_state->conn); // Pulisce la lista di comandi in coda
             free(test_state->conn);      // Pulisce la struttura Conn
         }
         if (test_state->store) {
@@ -54,6 +58,38 @@ static int teardown(void** state) {
 }
 
 // --- HELPER ---
+
+static Command* create_command(int argc, ...) {
+    Command* cmd = (Command*)calloc(1, sizeof(Command));
+    assert_non_null(cmd);
+    cmd->argc = argc;
+    cmd->argv = (char**)calloc(argc, sizeof(char*));
+    assert_non_null(cmd->argv);
+
+    va_list args;
+    va_start(args, argc);
+    for (int i = 0; i < argc; i++) {
+        const char* arg = va_arg(args, const char*);
+        cmd->argv[i] = strdup(arg);
+        assert_non_null(cmd->argv[i]);
+    }
+    va_end(args);
+    return cmd;
+}
+
+static void free_command(Command* cmd) {
+    if (cmd) {
+        if (cmd->argv) {
+            for (uint32_t i = 0; i < cmd->argc; i++) {
+                if (cmd->argv[i]) {
+                    free(cmd->argv[i]);
+                }
+            }
+            free(cmd->argv);
+        }
+        free(cmd);
+    }
+}
 
 static void build_fake_command(uint8_t* buffer, size_t buffer_size, size_t* size, int num_args, ...) {
     va_list args;
@@ -74,7 +110,7 @@ static void build_fake_command(uint8_t* buffer, size_t buffer_size, size_t* size
     va_end(args);
 }
 
-// --- TEST CASES ---
+// --- ORIGINAL PARSING UNIT TESTS ---
 
 // Test 1: Comando intero
 static void test_parse_full_command_at_once(void** state) {
@@ -258,6 +294,384 @@ static void test_parse_empty_command(void** state) {
     assert_string_equal((char*)conn->wbuf, "+OK\r\n");
 }
 
+// --- get_command_reply UNIT TESTS ---
+
+static void test_get_command_reply_ping(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd = create_command(1, "PING");
+    char* reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "+PONG\r\n");
+    free(reply);
+    free_command(cmd);
+
+    cmd = create_command(2, "PING", "hello");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$5\r\nhello\r\n");
+    free(reply);
+    free_command(cmd);
+}
+
+static void test_get_command_reply_set_get_string(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd;
+    char* reply;
+
+    // SET key value
+    cmd = create_command(3, "SET", "mykey", "myvalue");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "+OK\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // GET key
+    cmd = create_command(2, "GET", "mykey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$7\r\nmyvalue\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // GET non-existent key
+    cmd = create_command(2, "GET", "nonexistent");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$-1\r\n");
+    free(reply);
+    free_command(cmd);
+}
+
+static void test_get_command_reply_hset_hget_hlen(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd;
+    char* reply;
+
+    // HSET myhash field1 value1 (new field)
+    cmd = create_command(4, "HSET", "myhash", "field1", "value1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HSET myhash field2 value2 (new field)
+    cmd = create_command(4, "HSET", "myhash", "field2", "value2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HSET myhash field1 newvalue1 (updated field)
+    cmd = create_command(4, "HSET", "myhash", "field1", "newvalue1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HGET myhash field1
+    cmd = create_command(3, "HGET", "myhash", "field1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$9\r\nnewvalue1\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HGET myhash nonexistentfield
+    cmd = create_command(3, "HGET", "myhash", "nonexistentfield");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$-1\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HLEN myhash
+    cmd = create_command(2, "HLEN", "myhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":2\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HLEN nonexistenthash
+    cmd = create_command(2, "HLEN", "nonexistenthash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // Try HSET on a string key (should error)
+    cmd = create_command(3, "SET", "stringkey", "stringval");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    free(reply);
+    free_command(cmd); // Dispose SET command
+
+    cmd = create_command(4, "HSET", "stringkey", "field", "value");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "-ERR HSET failed\r\n"); // store_hset returns -1
+    free(reply);
+    free_command(cmd);
+}
+
+static void test_get_command_reply_hdel_hgetall(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd;
+    char* reply;
+
+    // Prep: HSET some fields
+    cmd = create_command(4, "HSET", "myhashdelgetall", "f1", "v1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+    cmd = create_command(4, "HSET", "myhashdelgetall", "f2", "v2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+    cmd = create_command(4, "HSET", "myhashdelgetall", "f3", "v3");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+
+    // HDEL existing field
+    cmd = create_command(3, "HDEL", "myhashdelgetall", "f2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HDEL non-existent field
+    cmd = create_command(3, "HDEL", "myhashdelgetall", "nonexistent");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HGETALL
+    cmd = create_command(2, "HGETALL", "myhashdelgetall");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    // Note: order is not guaranteed, but we can check for elements
+    // "*4\r\n$2\r\nf1\r\n$2\r\nv1\r\n$2\r\nf3\r\n$2\r\nv3\r\n"
+    assert_true(strstr(reply, "$2\r\nf1\r\n"));
+    assert_true(strstr(reply, "$2\r\nv1\r\n"));
+    assert_false(strstr(reply, "$2\r\nf2\r\n")); // f2 should be deleted
+    assert_false(strstr(reply, "$2\r\nv2\r\n"));
+    assert_true(strstr(reply, "$2\r\nf3\r\n"));
+    assert_true(strstr(reply, "$2\r\nv3\r\n"));
+    assert_true(strstr(reply, "*4\r\n")); // Should have 4 elements (2 fields + 2 values)
+    free(reply);
+    free_command(cmd);
+
+    // HGETALL on non-existent hash
+    cmd = create_command(2, "HGETALL", "nonexistenthash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "*0\r\n"); // Redis returns empty array
+    free(reply);
+    free_command(cmd);
+
+    // HGETALL on string key (should error WRONGTYPE)
+    cmd = create_command(3, "SET", "stringforkey", "stringvalue");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+
+    cmd = create_command(2, "HGETALL", "stringforkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+    free(reply);
+    free_command(cmd);
+}
+
+static void test_get_command_reply_del_exists_type(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd;
+    char* reply;
+
+    // Prep: SET a string and HSET a hash
+    cmd = create_command(3, "SET", "strkey", "strval");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+    cmd = create_command(4, "HSET", "hashkey", "f1", "v1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+
+    // EXISTS strkey
+    cmd = create_command(2, "EXISTS", "strkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // EXISTS hashkey
+    cmd = create_command(2, "EXISTS", "hashkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // EXISTS nonexistent
+    cmd = create_command(2, "EXISTS", "nonexistent");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // TYPE strkey
+    cmd = create_command(2, "TYPE", "strkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "+string\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // TYPE hashkey
+    cmd = create_command(2, "TYPE", "hashkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "+hash\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // TYPE nonexistent
+    cmd = create_command(2, "TYPE", "nonexistent");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "+none\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // DEL single key (strkey)
+    cmd = create_command(2, "DEL", "strkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n");
+    free(reply);
+    free_command(cmd);
+    cmd = create_command(2, "EXISTS", "strkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // DEL multiple keys (hashkey, nonexistent)
+    cmd = create_command(3, "DEL", "hashkey", "nonexistent");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n"); // Only hashkey should be deleted
+    free(reply);
+    free_command(cmd);
+    cmd = create_command(2, "EXISTS", "hashkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n");
+    free(reply);
+    free_command(cmd);
+}
+
+
+// --- execute_command UNIT TESTS ---
+
+static void test_execute_command_set_get(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Conn* conn = test_state->conn;
+    HashMap* store = test_state->store;
+
+    // SET command
+    Command* cmd_set = create_command(3, "SET", "k1", "v1");
+    cmd_create_and_append(conn, cmd_set->argv, cmd_set->argc, &conn->cmd_list_head, &conn->cmd_list_tail);
+    cmd_set->argv = NULL; // Ownership transferred
+
+    execute_command(conn, store);
+    conn->wbuf[conn->wbuf_size] = '\0'; // Null-terminate for assert_string_equal
+    assert_string_equal((char*)conn->wbuf, "+OK\r\n");
+    conn->wbuf_size = 0; // Clear size for next test
+    memset(conn->wbuf, 0, sizeof(conn->wbuf)); // Clear buffer content
+
+    // GET command
+    Command* cmd_get = create_command(2, "GET", "k1");
+    cmd_create_and_append(conn, cmd_get->argv, cmd_get->argc, &conn->cmd_list_head, &conn->cmd_list_tail);
+    cmd_get->argv = NULL; // Ownership transferred
+
+    execute_command(conn, store);
+    conn->wbuf[conn->wbuf_size] = '\0'; // Null-terminate for assert_string_equal
+    assert_string_equal((char*)conn->wbuf, "$2\r\nv1\r\n");
+    conn->wbuf_size = 0;
+    memset(conn->wbuf, 0, sizeof(conn->wbuf));
+
+    // GET non-existent
+    Command* cmd_get_non = create_command(2, "GET", "nonexistent");
+    cmd_create_and_append(conn, cmd_get_non->argv, cmd_get_non->argc, &conn->cmd_list_head, &conn->cmd_list_tail);
+    cmd_get_non->argv = NULL; // Ownership transferred
+
+    execute_command(conn, store);
+    conn->wbuf[conn->wbuf_size] = '\0'; // Null-terminate for assert_string_equal
+    assert_string_equal((char*)conn->wbuf, "$-1\r\n");
+    conn->wbuf_size = 0;
+    memset(conn->wbuf, 0, sizeof(conn->wbuf));
+}
+
+static void test_execute_command_multi_exec(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Conn* conn = test_state->conn;
+    HashMap* store = test_state->store;
+    Command *cmd;
+    char *reply;
+
+    // MULTI
+    cmd = create_command(1, "MULTI");
+    cmd_create_and_append(conn, cmd->argv, cmd->argc, &conn->cmd_list_head, &conn->cmd_list_tail); cmd->argv = NULL;
+    execute_command(conn, store);
+    assert_true(conn->in_transaction);
+    assert_string_equal((char*)conn->wbuf, "+OK\r\n"); conn->wbuf_size = 0;
+
+    // Queued SET
+    cmd = create_command(3, "SET", "txkey", "txval");
+    cmd_create_and_append(conn, cmd->argv, cmd->argc, &conn->cmd_list_head, &conn->cmd_list_tail); cmd->argv = NULL;
+    execute_command(conn, store);
+    assert_non_null(conn->queued_cmds_head);
+    assert_string_equal((char*)conn->wbuf, "+QUEUED\r\n"); conn->wbuf_size = 0;
+
+    // Queued HSET
+    cmd = create_command(4, "HSET", "txhash", "f1", "v1");
+    cmd_create_and_append(conn, cmd->argv, cmd->argc, &conn->cmd_list_head, &conn->cmd_list_tail); cmd->argv = NULL;
+    execute_command(conn, store);
+    assert_non_null(conn->queued_cmds_head->next);
+    assert_string_equal((char*)conn->wbuf, "+QUEUED\r\n"); conn->wbuf_size = 0;
+
+    // EXEC
+    cmd = create_command(1, "EXEC");
+    cmd_create_and_append(conn, cmd->argv, cmd->argc, &conn->cmd_list_head, &conn->cmd_list_tail); cmd->argv = NULL;
+    execute_command(conn, store);
+    assert_false(conn->in_transaction);
+    assert_null(conn->queued_cmds_head); // Queued commands should be cleared
+
+    // Expected EXEC reply: array of +OK\r\n and :1\r\n
+    // "*2\r\n+OK\r\n:1\r\n"
+    assert_true(strstr((char*)conn->wbuf, "*2\r\n"));
+    assert_true(strstr((char*)conn->wbuf, "+OK\r\n"));
+    assert_true(strstr((char*)conn->wbuf, ":1\r\n"));
+    conn->wbuf_size = 0;
+
+    // Verify commands were executed
+    cmd = create_command(2, "GET", "txkey");
+    reply = get_command_reply(conn, cmd, store);
+    assert_string_equal(reply, "$5\r\ntxval\r\n"); free(reply); free_command(cmd);
+
+    cmd = create_command(3, "HGET", "txhash", "f1");
+    reply = get_command_reply(conn, cmd, store);
+    assert_string_equal(reply, "$2\r\nv1\r\n"); free(reply); free_command(cmd);
+}
+
+static void test_execute_command_multi_discard(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Conn* conn = test_state->conn;
+    HashMap* store = test_state->store;
+    Command *cmd;
+
+    // MULTI
+    cmd = create_command(1, "MULTI");
+    cmd_create_and_append(conn, cmd->argv, cmd->argc, &conn->cmd_list_head, &conn->cmd_list_tail); cmd->argv = NULL;
+    execute_command(conn, store);
+    conn->wbuf_size = 0;
+
+    // Queued SET
+    cmd = create_command(3, "SET", "txkeydiscard", "txvaldiscard");
+    cmd_create_and_append(conn, cmd->argv, cmd->argc, &conn->cmd_list_head, &conn->cmd_list_tail); cmd->argv = NULL;
+    execute_command(conn, store);
+    conn->wbuf_size = 0;
+
+    // DISCARD
+    cmd = create_command(1, "DISCARD");
+    cmd_create_and_append(conn, cmd->argv, cmd->argc, &conn->cmd_list_head, &conn->cmd_list_tail); cmd->argv = NULL;
+    execute_command(conn, store);
+    assert_false(conn->in_transaction);
+    assert_null(conn->queued_cmds_head); // Queued commands should be cleared
+    conn->wbuf[conn->wbuf_size] = '\0'; // Null-terminate for assert_string_equal
+    assert_string_equal((char*)conn->wbuf, "+OK\r\n");
+    conn->wbuf_size = 0;
+    memset(conn->wbuf, 0, sizeof(conn->wbuf));
+
+    // Verify commands were NOT executed
+    cmd = create_command(2, "GET", "txkeydiscard");
+    char* reply = get_command_reply(conn, cmd, store);
+    assert_string_equal(reply, "$-1\r\n"); free(reply); free_command(cmd);
+}
+
 // --- MAIN ---
 
 int main(void) {
@@ -266,6 +680,14 @@ int main(void) {
         cmocka_unit_test_setup_teardown(test_parse_command_in_chunks, setup, teardown),
         cmocka_unit_test_setup_teardown(test_parse_two_commands_at_once, setup, teardown),
         cmocka_unit_test_setup_teardown(test_parse_empty_command, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_ping, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_set_get_string, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_hset_hget_hlen, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_hdel_hgetall, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_del_exists_type, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_command_set_get, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_command_multi_exec, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_command_multi_discard, setup, teardown),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);
