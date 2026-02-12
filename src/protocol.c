@@ -143,12 +143,14 @@ char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
         if (cmd->argc != 3) {
             len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'set' command\r\n");
         }
-        else if (store_set(store, cmd->argv[1], cmd->argv[2])) {
-            const char* reply_str = "OK";
-            len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
-        }
         else {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR OOM during SET\r\n");
+            int set_result = store_set(store, cmd->argv[1], cmd->argv[2]);
+            if (set_result == 1 || set_result == 0) { // 1 for new key, 0 for updated key
+                const char* reply_str = "OK";
+                len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+            } else { // -1 for OOM or type mismatch error
+                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR OOM during SET\r\n");
+            }
         }
     }
     else if (strcasecmp(cmd->argv[0], "GET") == 0) {
@@ -169,15 +171,27 @@ char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
         }
     }
     else if (strcasecmp(cmd->argv[0], "HSET") == 0) {
-        if (cmd->argc != 4) {
+        if (cmd->argc < 4 || (cmd->argc - 2) % 2 != 0) { // HSET key field value [field value ...] must have at least 4 args and an even number of field-value pairs
             len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hset' command\r\n");
         }
         else {
-            int hset_result = store_hset(store, cmd->argv[1], cmd->argv[2], cmd->argv[3]);
-            if (hset_result == 1 || hset_result == 0) { // 1 for new field, 0 for updated field
-                len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hset_result);
-            } else {
-                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR HSET failed\r\n");
+            int new_fields_count = 0;
+            // Iterate through field-value pairs. Start from cmd->argv[2] as cmd->argv[0] is HSET, cmd->argv[1] is key.
+            for (uint32_t i = 2; i < cmd->argc; i += 2) {
+                const char* field = cmd->argv[i];
+                const char* value = cmd->argv[i+1];
+                int hset_result = store_hset(store, cmd->argv[1], field, value);
+                if (hset_result == 1) { // New field added
+                    new_fields_count++;
+                } else if (hset_result == -1) { // Error during HSET (e.g., wrong type on key)
+                    len = snprintf(reply_buf, sizeof(reply_buf), "-ERR HSET failed: %s is not a hash or other error\r\n", cmd->argv[1]);
+                    // Break loop and return error immediately
+                    new_fields_count = -1; // Indicate error
+                    break;
+                }
+            }
+            if (new_fields_count != -1) {
+                len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", new_fields_count);
             }
         }
     }
@@ -210,16 +224,19 @@ char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
         }
     }
     else if (strcasecmp(cmd->argv[0], "HDEL") == 0) {
-        if (cmd->argc != 3) {
+        if (cmd->argc < 3) { // HDEL key field [field ...] must have at least 3 args
             len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hdel' command\r\n");
         }
         else {
-            int hdel_result = store_hdel(store, cmd->argv[1], cmd->argv[2]);
-            if (hdel_result == 1 || hdel_result == 0) { // 1 for deleted, 0 for not found
+            // cmd->argv[1] is the key, cmd->argv[2] onwards are fields
+            // The fields array starts from cmd->argv[2]
+            // num_fields is cmd->argc - 2
+            int hdel_result = store_hdel(store, cmd->argv[1], (const char**)&cmd->argv[2], cmd->argc - 2);
+            if (hdel_result >= 0) { // Number of deleted fields (can be 0)
                 len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hdel_result);
-            } else if (hdel_result == -1) { // Wrong type or other error
+            } else if (hdel_result == -1) { // Wrong type
                 len = snprintf(reply_buf, sizeof(reply_buf), "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
-            } else {
+            } else { // Other potential errors from store_hdel
                 len = snprintf(reply_buf, sizeof(reply_buf), "-ERR HDEL failed\r\n");
             }
         }
@@ -295,6 +312,29 @@ char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
             } else { // (ObjType)-1 for not found
                 len = snprintf(reply_buf, sizeof(reply_buf), "+none\r\n");
             }
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "TYPE") == 0) {
+        if (cmd->argc != 2) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'type' command\r\n");
+        }
+        else {
+            ObjType type = store_type(store, cmd->argv[1]);
+            if (type == OBJ_STRING) {
+                len = snprintf(reply_buf, sizeof(reply_buf), "+string\r\n");
+            } else if (type == OBJ_HASH) {
+                len = snprintf(reply_buf, sizeof(reply_buf), "+hash\r\n");
+            } else { // (ObjType)-1 for not found
+                len = snprintf(reply_buf, sizeof(reply_buf), "+none\r\n");
+            }
+        }
+    }
+    else if (strcasecmp(cmd->argv[0], "FLUSHDB") == 0) {
+        if (cmd->argc != 1) {
+            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'flushdb' command\r\n");
+        } else {
+            store_flushdb(store);
+            len = snprintf(reply_buf, sizeof(reply_buf), "+OK\r\n");
         }
     }
     else {

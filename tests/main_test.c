@@ -400,7 +400,7 @@ static void test_get_command_reply_hset_hget_hlen(void** state) {
 
     cmd = create_command(4, "HSET", "stringkey", "field", "value");
     reply = get_command_reply(test_state->conn, cmd, test_state->store);
-    assert_string_equal(reply, "-ERR HSET failed\r\n"); // store_hset returns -1
+    assert_string_equal(reply, "-ERR HSET failed: stringkey is not a hash or other error\r\n"); // Updated expected error
     free(reply);
     free_command(cmd);
 }
@@ -459,6 +459,151 @@ static void test_get_command_reply_hdel_hgetall(void** state) {
     reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
 
     cmd = create_command(2, "HGETALL", "stringforkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+    free(reply);
+    free_command(cmd);
+}
+
+static void test_get_command_reply_hset_multi_fields(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd;
+    char* reply;
+
+    // HSET mymultihash f1 v1 f2 v2 f3 v3 (all new fields)
+    cmd = create_command(8, "HSET", "mymultihash", "f1", "v1", "f2", "v2", "f3", "v3");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":3\r\n"); // 3 new fields added
+    free(reply);
+    free_command(cmd);
+
+    // Verify fields
+    cmd = create_command(3, "HGET", "mymultihash", "f1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$2\r\nv1\r\n"); free(reply); free_command(cmd);
+
+    cmd = create_command(3, "HGET", "mymultihash", "f2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$2\r\nv2\r\n"); free(reply); free_command(cmd);
+
+    cmd = create_command(3, "HGET", "mymultihash", "f3");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$2\r\nv3\r\n"); free(reply); free_command(cmd);
+
+    // HLEN should be 3
+    cmd = create_command(2, "HLEN", "mymultihash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":3\r\n"); free(reply); free_command(cmd);
+
+    // HSET mymultihash f2 new_v2 f4 v4 (one updated, one new)
+    cmd = create_command(6, "HSET", "mymultihash", "f2", "new_v2", "f4", "v4");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n"); // 1 new field added (f4)
+    free(reply);
+    free_command(cmd);
+
+    // Verify updated and new fields
+    cmd = create_command(3, "HGET", "mymultihash", "f2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$6\r\nnew_v2\r\n"); free(reply); free_command(cmd);
+
+    cmd = create_command(3, "HGET", "mymultihash", "f4");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$2\r\nv4\r\n"); free(reply); free_command(cmd);
+
+    // HLEN should now be 4
+    cmd = create_command(2, "HLEN", "mymultihash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":4\r\n"); free(reply); free_command(cmd);
+
+    // HSET mymultihash f1 final_v1 f2 final_v2 (all updated)
+    cmd = create_command(6, "HSET", "mymultihash", "f1", "final_v1", "f2", "final_v2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n"); // 0 new fields added
+    free(reply);
+    free_command(cmd);
+
+    // Verify updated fields
+    cmd = create_command(3, "HGET", "mymultihash", "f1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$8\r\nfinal_v1\r\n"); free(reply); free_command(cmd);
+
+    cmd = create_command(3, "HGET", "mymultihash", "f2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "$8\r\nfinal_v2\r\n"); free(reply); free_command(cmd);
+
+    // HLEN should still be 4
+    cmd = create_command(2, "HLEN", "mymultihash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":4\r\n"); free(reply); free_command(cmd);
+
+    // HSET with odd number of arguments (error)
+    cmd = create_command(5, "HSET", "myhash", "f1", "v1", "f2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "-ERR wrong number of arguments for 'hset' command\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // HSET with too few arguments (error)
+    cmd = create_command(3, "HSET", "myhash", "f1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "-ERR wrong number of arguments for 'hset' command\r\n");
+    free(reply);
+    free_command(cmd);
+}
+
+
+static void test_get_command_reply_hdel_multi_fields(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd;
+    char* reply;
+
+    // Prep: HSET multiple fields into a hash
+    cmd = create_command(8, "HSET", "multihdelhash", "mf1", "mv1", "mf2", "mv2", "mf3", "mv3");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+    // HLEN should be 3
+    cmd = create_command(2, "HLEN", "multihdelhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":3\r\n"); free(reply); free_command(cmd);
+
+    // HDEL multiple existing fields
+    cmd = create_command(4, "HDEL", "multihdelhash", "mf1", "mf3");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":2\r\n"); // 2 fields deleted
+    free(reply);
+    free_command(cmd);
+
+    // Verify HLEN is 1
+    cmd = create_command(2, "HLEN", "multihdelhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":1\r\n"); free(reply); free_command(cmd);
+    // Verify remaining field
+    cmd = create_command(3, "HGET", "multihdelhash", "mf2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, "$3\r\nmv2\r\n"); free(reply); free_command(cmd);
+
+    // HDEL a mix of existing and non-existing fields
+    cmd = create_command(4, "HDEL", "multihdelhash", "mf2", "mf4");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":1\r\n"); // Only mf2 was deleted
+    free(reply);
+    free_command(cmd);
+
+    // Verify HLEN is 0
+    cmd = create_command(2, "HLEN", "multihdelhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":0\r\n"); free(reply); free_command(cmd);
+    // Verify no fields remain
+    cmd = create_command(3, "HGET", "multihdelhash", "mf2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, "$-1\r\n"); free(reply); free_command(cmd);
+
+    // HDEL on a non-existent hash
+    cmd = create_command(4, "HDEL", "nonexistentmultihdel", "f1", "f2");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, ":0\r\n"); // 0 fields deleted
+    free(reply);
+    free_command(cmd);
+
+    // HDEL on a string key
+    cmd = create_command(3, "SET", "stringhdelkey", "strval");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); free(reply); free_command(cmd);
+    cmd = create_command(4, "HDEL", "stringhdelkey", "field1", "field2");
     reply = get_command_reply(test_state->conn, cmd, test_state->store);
     assert_string_equal(reply, "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
     free(reply);
@@ -543,6 +688,46 @@ static void test_get_command_reply_del_exists_type(void** state) {
     free_command(cmd);
 }
 
+static void test_get_command_reply_flushdb(void** state) {
+    TestState* test_state = (TestState*)*state;
+    Command* cmd;
+    char* reply;
+
+    // Set some keys
+    cmd = create_command(3, "SET", "flushkey1", "flushval1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, "+OK\r\n"); free(reply); free_command(cmd);
+    cmd = create_command(4, "HSET", "flushhash", "f1", "v1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":1\r\n"); free(reply); free_command(cmd);
+
+    // Verify keys exist
+    cmd = create_command(2, "EXISTS", "flushkey1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":1\r\n"); free(reply); free_command(cmd);
+    cmd = create_command(2, "EXISTS", "flushhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":1\r\n"); free(reply); free_command(cmd);
+    cmd = create_command(2, "HLEN", "flushhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":1\r\n"); free(reply); free_command(cmd);
+
+    // Call FLUSHDB
+    cmd = create_command(1, "FLUSHDB");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store);
+    assert_string_equal(reply, "+OK\r\n");
+    free(reply);
+    free_command(cmd);
+
+    // Verify keys are gone
+    cmd = create_command(2, "EXISTS", "flushkey1");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":0\r\n"); free(reply); free_command(cmd);
+    cmd = create_command(2, "EXISTS", "flushhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":0\r\n"); free(reply); free_command(cmd);
+    cmd = create_command(2, "HLEN", "flushhash");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, ":0\r\n"); free(reply); free_command(cmd);
+
+    // Ensure new keys can be set
+    cmd = create_command(3, "SET", "newkey", "newval");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, "+OK\r\n"); free(reply); free_command(cmd);
+    cmd = create_command(2, "GET", "newkey");
+    reply = get_command_reply(test_state->conn, cmd, test_state->store); assert_string_equal(reply, "$6\r\nnewval\r\n"); free(reply); free_command(cmd);
+}
 
 // --- execute_command UNIT TESTS ---
 
@@ -684,6 +869,9 @@ int main(void) {
         cmocka_unit_test_setup_teardown(test_get_command_reply_set_get_string, setup, teardown),
         cmocka_unit_test_setup_teardown(test_get_command_reply_hset_hget_hlen, setup, teardown),
         cmocka_unit_test_setup_teardown(test_get_command_reply_hdel_hgetall, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_hdel_multi_fields, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_hset_multi_fields, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_get_command_reply_flushdb, setup, teardown), // Add this line
         cmocka_unit_test_setup_teardown(test_get_command_reply_del_exists_type, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_command_set_get, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_command_multi_exec, setup, teardown),

@@ -43,6 +43,9 @@ int store_delete_entry_from_map(HashMap* map, const char* key);
 // Clean up the hash map, freeing all allocated memory.
 void store_free(HashMap* map);
 
+// Frees all data in the store and re-initializes it.
+void store_flushdb(HashMap* map);
+
 // Top-level Key Commands
 // Delete one or more keys. Returns the number of keys that were removed.
 int store_del(HashMap* map, const char** keys, size_t num_keys);
@@ -67,7 +70,7 @@ int store_hlen(HashMap* map, const char* key);
 
 // Delete a field-value pair from a hash key. Returns 1 if the field was present and deleted,
 // 0 if the field or the key didn't exist or if the key is not a hash.
-int store_hdel(HashMap* map, const char* key, const char* field);
+int store_hdel(HashMap* map, const char* key, const char** fields, size_t num_fields);
 
 // Retrieves all fields and values for a given hash key.
 // out_results: Pointer to an array of char* where results will be stored (field1, value1, field2, value2, ...).

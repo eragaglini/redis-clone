@@ -257,8 +257,8 @@ int store_hlen(HashMap* map, const char* key) {
     return 0; // Key not found, return 0 as per Redis HLEN behavior
 }
 
-int store_hdel(HashMap* map, const char* key, const char* field) {
-    if (!map || !key || !field) return -1; // Invalid input, return -1 for error
+int store_hdel(HashMap* map, const char* key, const char** fields, size_t num_fields) {
+    if (!map || !key || !fields || num_fields == 0) return 0; // Invalid input, return 0 as per Redis HDEL if no fields or invalid map/key
 
     uint32_t index = get_bucket_index(key);
     Entry* current = map->buckets[index];
@@ -283,8 +283,14 @@ int store_hdel(HashMap* map, const char* key, const char* field) {
         return -1; // Indicate wrong type
     }
 
-    // Key is a hash, call store_delete_entry_from_map on the inner hash map
-    return store_delete_entry_from_map((HashMap*)main_entry->value, field);
+    HashMap* inner_map = (HashMap*)main_entry->value;
+    int deleted_count = 0;
+    for (size_t i = 0; i < num_fields; ++i) {
+        if (store_delete_entry_from_map(inner_map, fields[i])) {
+            deleted_count++;
+        }
+    }
+    return deleted_count;
 }
 
 int store_hgetall(HashMap* map, const char* key, char*** out_results, size_t* out_count) {
@@ -453,4 +459,10 @@ void store_free(HashMap* map) {
         }
         map->buckets[i] = NULL;
     }
+}
+
+void store_flushdb(HashMap* map) {
+    if (!map) return;
+    store_free(map); // Free all existing entries
+    store_init(map); // Re-initialize the hash map
 }

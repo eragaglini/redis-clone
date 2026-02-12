@@ -68,8 +68,10 @@ def c_server():
 def redis_client(c_server):
     """
     Fixture to provide a Redis client for each test function.
+    Ensures a clean database state before each test.
     """
     r = redis.Redis(host=HOST, port=PORT, decode_responses=True)
+    r.flushdb() # Clear the database before each test
     yield r
     r.connection_pool.disconnect() # Ensure client connection is closed
 
@@ -293,6 +295,63 @@ def test_hgetall_on_string_key(redis_client):
 
     with pytest.raises(redis.exceptions.ResponseError):
         redis_client.hgetall(key)
+
+def test_hset_multiple_fields(redis_client):
+    """
+    Test HSET command with multiple field-value pairs.
+    """
+    hash_key = "multihash"
+    # Set multiple fields at once using mapping
+    response_hset = redis_client.hset(hash_key, mapping={"f1": "v1", "f2": "v2", "f3": "v3"})
+    assert response_hset == 3 # 3 new fields added
+
+    # Verify individual fields
+    assert redis_client.hget(hash_key, "f1") == "v1"
+    assert redis_client.hget(hash_key, "f2") == "v2"
+    assert redis_client.hget(hash_key, "f3") == "v3"
+
+    # Verify HLEN
+    assert redis_client.hlen(hash_key) == 3
+
+    # Update some fields and add a new one
+    response_hset_update = redis_client.hset(hash_key, mapping={"f2": "new_v2", "f4": "v4"})
+    assert response_hset_update == 1 # 1 new field added (f4)
+
+    # Verify updated and new fields
+    assert redis_client.hget(hash_key, "f2") == "new_v2"
+    assert redis_client.hget(hash_key, "f4") == "v4"
+    assert redis_client.hlen(hash_key) == 4
+
+def test_hdel_multiple_fields(redis_client):
+    """
+    Test HDEL command with multiple field arguments.
+    """
+    hash_key = "multihdeldelhash"
+    redis_client.hset(hash_key, mapping={"mf1": "mv1", "mf2": "mv2", "mf3": "mv3"})
+    assert redis_client.hlen(hash_key) == 3
+
+    # Delete multiple existing fields
+    response_hdel = redis_client.hdel(hash_key, "mf1", "mf3")
+    assert response_hdel == 2 # 2 fields deleted
+    assert redis_client.hlen(hash_key) == 1
+    assert redis_client.hget(hash_key, "mf1") is None
+    assert redis_client.hget(hash_key, "mf2") == "mv2"
+    assert redis_client.hget(hash_key, "mf3") is None
+
+    # Delete a mix of existing and non-existing fields
+    response_hdel_mix = redis_client.hdel(hash_key, "mf2", "mf4", "mf5")
+    assert response_hdel_mix == 1 # Only mf2 was deleted
+    assert redis_client.hlen(hash_key) == 0
+
+    # Delete from a non-existent hash
+    response_hdel_non_existent_hash = redis_client.hdel("nonexistenthash", "f1", "f2")
+    assert response_hdel_non_existent_hash == 0
+
+    # HDEL on a string key with multiple fields
+    key = "stringkeyhdelmulti"
+    redis_client.set(key, "somevalue")
+    with pytest.raises(redis.exceptions.ResponseError):
+        redis_client.hdel(key, "field1", "field2")
 
 def test_del_single_key(redis_client):
     """
