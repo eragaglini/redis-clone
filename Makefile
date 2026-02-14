@@ -26,7 +26,7 @@ OBJS = $(SRCS:.c=.o)
 TEST_TARGET = bin/run_tests
 # I file oggetto necessari per l'eseguibile di test
 TEST_SRC_FILES = tests/main_test.c
-TEST_OBJS = $(TEST_SRC_FILES:.c=.o) tests_protocol.o src/store.o # src/store.o è ora parte della lista degli oggetti di test
+TEST_OBJS = $(TEST_SRC_FILES:.c=.o) tests_protocol.o src/store.o src/aof.o # src/store.o è ora parte della lista degli oggetti di test
 
 # Oggetti di CMocka
 CMOCKA_SRC = lib/cmocka/src/cmocka.c
@@ -62,6 +62,8 @@ tests_protocol.o: src/protocol.c
 src/store.o: src/store.c
 	$(CC) $(TEST_CFLAGS) -c $< -o $@
 
+src/aof.o: src/aof.c
+	$(CC) $(TEST_CFLAGS) -c $< -o $@
 
 lib/cmocka/src/cmocka.o: lib/cmocka/src/cmocka.c
 	$(CC) $(TEST_CFLAGS) -c $< -o $@

@@ -22,4 +22,5 @@ __pycache__/
 
 # Doxygen output
 html/
-latex/
+latex/appendonly.aof
+appendonly.aof

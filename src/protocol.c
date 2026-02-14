@@ -12,7 +12,7 @@
 #define DEBUG_PRINTF(...)
 #endif
 
-void free_argv(Conn* c) {
+void free_args(Conn* c) {
     if (c == NULL) return; // Un check silenzioso è più robusto dell'assert in produzione
 
     if (c->args) {
@@ -361,7 +361,11 @@ int get_command_reply(char* reply_buf, int max_len, Command* cmd, HashMap* store
     return len;
 }
 
-void execute_command(Conn* c, HashMap* store) {
+#include "aof.h"
+
+// ... (other includes)
+
+void execute_command(Conn* c, HashMap* store, int from_aof) {
     DEBUG_PRINTF("DEBUG: execute_command called for connection %p\n", (void*)c);
     while (c->cmd_list_head != NULL) {
         Command* cmd = c->cmd_list_head;
@@ -406,6 +410,9 @@ void execute_command(Conn* c, HashMap* store) {
                         Command* current_queued_cmd = c->queued_cmds_head;
                         while (current_queued_cmd != NULL) {
                             reply_len += get_command_reply(reply_buf + reply_len, sizeof(reply_buf) - reply_len, current_queued_cmd, store);
+                            if (!from_aof) {
+                                aof_log(current_queued_cmd->argc, current_queued_cmd->args);
+                            }
                             current_queued_cmd = current_queued_cmd->next;
                         }
                     }
@@ -434,6 +441,9 @@ void execute_command(Conn* c, HashMap* store) {
 
         // If not a transaction command or not in transaction, execute normally
         if (reply_len == 0) {
+            if (!from_aof) {
+                aof_log(cmd->argc, cmd->args);
+            }
             reply_len = get_command_reply(reply_buf, sizeof(reply_buf), cmd, store);
         }
 
@@ -460,7 +470,7 @@ void consume_buffer(Conn* c) {
     if (c->error) {
         DEBUG_PRINTF("DEBUG: Connection %p in error state.\n", (void*)c);
         // If there's an error, clear any partially parsed command's argv to avoid leaks.
-        free_argv(c);
+        free_args(c);
         return;
     }
 

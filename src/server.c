@@ -213,7 +213,7 @@ static void handle_new_connection(int listen_fd) {
         c->fd = connfd;
         c->rbuf_size = 0; c->wbuf_size = 0; c->wbuf_sent = 0;
         c->parse_state = RESP_PARSE_TYPE; c->argc = 0; c->current_arg_idx = 0;
-        c->resp_expected_len = 0; c->argv = NULL; c->error = 0;
+        c->resp_expected_len = 0; c->args = NULL; c->error = 0;
         c->last_activity_time = get_monotonic_time_ms();
         c->cmd_list_head = NULL;
         c->cmd_list_tail = NULL;
@@ -279,7 +279,7 @@ static void handle_client_io(int pfd_idx) {
             // dobbiamo ora eseguire i comandi accodati.
             if (c->cmd_list_head) {
                 // Esegui tutti i comandi che sono stati parsati e accodati.
-                execute_command(c, &g_store);
+                execute_command(c, &g_store, 0);
             }
         }
 
@@ -343,9 +343,16 @@ static void handle_client_io(int pfd_idx) {
 // =====================================================================================
 // Questa funzione è il cuore del modulo `server.c`. Viene chiamata da `main.c`
 // per avviare e gestire l'intero processo del server.
+#include "aof.h"
+
 void server_run(void) {
     // Inizializza lo store globale del server.
     store_init(&g_store);
+
+    // Carica i dati dal file AOF
+    if (aof_load(&g_store) != 0) {
+        die("aof_load failed");
+    }
 
     // CONSIDERAZIONE: In un'applicazione reale, qui ci sarebbe la logica
     // per gestire la chiusura pulita del server (es. signal handlers)

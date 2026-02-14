@@ -97,7 +97,7 @@ void free_command_list(Conn* c);
 void free_queued_command_list(Conn* c);
 
 // Esegue il comando parsato e prepara la risposta.
-void execute_command(Conn* c, struct HashMap* store);
+void execute_command(Conn* c, struct HashMap* store, int from_aof);
 
 // Esegue un singolo comando e restituisce la sua risposta in una stringa allocata dinamicamente.
 int get_command_reply(char* reply_buf, int max_len, Command* cmd, struct HashMap* store);

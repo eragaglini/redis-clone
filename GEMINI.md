@@ -13,6 +13,8 @@ This document provides a high-level overview of the "Redis Clone" project, which
 -   **`include/`**: Empty, intended for public headers.
 -   **`lib/cmocka/`**: Submodule containing the `cmocka` unit testing framework.
 -   **`src/`**: Contains the core C source files for the server.
+    -   **`src/aof.c`**: Implements the Append-Only File (AOF) persistence logic.
+    -   **`src/aof.h`**: Header for the AOF module.
     -   **`src/mainpage.dox`**: Doxygen file defining the main page content for the generated documentation.
 -   **`tests/`**: Contains unit tests for the server components (`tests/main_test.c`) and Python-based integration tests (`tests/test_integration.py`).
 
@@ -56,6 +58,11 @@ These files define and implement the in-memory key-value store:
 -   **`store.h`**: Declares the data structures (`Entry` now supports `ObjType` enum and `void* value`) and functions for the key-value store, including `store_init`, `store_set`, `store_get`, `store_delete_entry_from_map` (renamed from `store_del` for internal use), `store_free`, `store_flushdb`, and new functions for Hash types: `store_hset`, `store_hget`, `store_hlen`, `store_hdel` (now supporting multiple fields), `store_hgetall`. Also includes new top-level key commands: `store_del` (for multiple keys), `store_exists`, and `store_type`. **All store operations are now binary-safe, correctly handling arbitrary byte sequences in keys, fields, and values.**
 -   **`store.c`**: Implements the hash map used for storing keys and values. It provides functions for setting and getting values, and now distinguishes between `OBJ_STRING` and `OBJ_HASH` types. `store_set` and `store_get` specifically handle string values. `store_hset`, `store_hget`, `store_hlen`, `store_hdel` (now supporting multiple fields) manage nested hash maps for `OBJ_HASH` types. `store_delete_entry_from_map` is the internal function for removing an entry from any `HashMap`. The new top-level `store_del` command can remove multiple keys. `store_exists` checks for key presence, and `store_type` returns the stored object type. `store_free` has been updated to recursively free memory based on the stored `ObjType`. `store_flushdb` clears all keys. Return values for functions have been refined to align with Redis's specific responses.
 
+### `src/aof.h` & `src/aof.c`
+These files introduce a basic Append-Only File (AOF) persistence strategy.
+-   **`aof_log()`**: Called from `execute_command()` for any command that modifies data (e.g., `SET`, `DEL`, `HSET`). It serializes the command back into the RESP protocol format and appends it to the `appendonly.aof` file. This ensures that every write operation is recorded on disk.
+-   **`aof_load()`**: Called once at server startup. It reads the `appendonly.aof` file, parses the sequence of RESP commands, and executes them in order to rebuild the in-memory data store to its last known state. It reuses the existing `consume_buffer` and `execute_command` logic to achieve this. A global flag prevents new commands from being re-logged to the AOF file during this loading process.
+
 
 
 ## Testing (`cmocka` unit tests, `pytest` integration tests)
@@ -79,7 +86,7 @@ These files define and implement the in-memory key-value store:
 -   **Set of Commands Limited**: Currently, `PING`, `SET`, `GET`, `HSET` (with multiple fields), `HGET`, `HLEN`, `HDEL` (with multiple fields), `HGETALL`, `DEL`, `EXISTS`, `TYPE`, `MULTI`, `EXEC`, `DISCARD`, and `FLUSHDB` commands are implemented. Other standard Redis commands (e.g., `LPUSH`, `SADD`) need to be added to `execute_command`.
 
 -   **Scalability and Robustness**: For production use, further optimizations for scalability (e.g., thread pools, `epoll`/`kqueue` instead of `poll()`) and more granular error management are needed.
--   **Lack of Persistence**: The server does not save data to disk, meaning all data is lost upon server restart.
+-   **Basic AOF Persistence**: A simple AOF (Append-Only File) persistence is implemented. All write commands are logged to a file and reloaded on startup. However, the implementation lacks AOF rewriting, which means the log file will grow indefinitely.
 -   The `fd2conn` array's direct indexing by file descriptor has scalability limitations for very high numbers of connections or large file descriptor values, as noted in `server.c`. A more robust mapping (e.g., hash map) would be required for a production-grade server.
 
 This overview should provide a solid foundation for understanding and further developing the Redis Clone project.

@@ -29,7 +29,7 @@ typedef struct Entry {
 
 // --- Hash Map Structure ---
 // Using a simple fixed-size array of linked lists for now.
-#define HASH_MAP_SIZE 1024 // A power of 2 is good for simple modulo hashing
+#define HASH_MAP_SIZE 16384 // A power of 2 is good for simple modulo hashing
 
 typedef struct HashMap {
     Entry* buckets[HASH_MAP_SIZE];
