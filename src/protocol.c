@@ -1,10 +1,10 @@
 #include "protocol.h"
+#include "store.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <strings.h> // Required for strcasecmp
-#include "store.h"   // Required for HashMap
 
 #ifdef DEBUG
 #define DEBUG_PRINTF(...) printf(__VA_ARGS__)
@@ -13,15 +13,21 @@
 #endif
 
 void free_argv(Conn* c) {
-    if (c->argv) {
-        DEBUG_PRINTF("DEBUG: Freeing argv for connection %p\n", (void*)c);
+    if (c == NULL) return; // Un check silenzioso è più robusto dell'assert in produzione
+
+    if (c->args) {
+        DEBUG_PRINTF("DEBUG: Freeing args for connection %p\n", (void*)c);
         for (uint32_t i = 0; i < c->argc; ++i) {
-            if (c->argv[i]) {
-                free(c->argv[i]);
+            // Dobbiamo liberare il "contenuto" (data), non la struct stessa
+            if (c->args[i].data != NULL) {
+                free(c->args[i].data);   // <--- CORRETTO: libera il buffer dei dati
+                c->args[i].data = NULL;
             }
         }
-        free(c->argv);
-        c->argv = NULL;
+        // Una volta liberati tutti i contenuti, liberiamo l'intero array di struct
+        free(c->args);
+        c->args = NULL;
+        c->argc = 0; // Buona pratica: resetta il conteggio
     }
 }
 
@@ -29,7 +35,7 @@ static void conn_error(Conn* c, const char* msg);
 
 // Crea un nuovo comando e lo appende alla lista specificata (head, tail).
 // Restituisce il puntatore al nuovo comando in caso di successo, NULL altrimenti.
-Command* cmd_create_and_append(Conn* c, char** argv, uint32_t argc, Command** head, Command** tail) {
+Command* cmd_create_and_append(Conn* c, Argument* args, uint32_t argc, Command** head, Command** tail) {
     DEBUG_PRINTF("DEBUG: Creating and appending command for connection %p: argc = %u\n", (void*)c, argc);
     Command* cmd = (Command*)malloc(sizeof(Command));
     if (!cmd) {
@@ -39,7 +45,7 @@ Command* cmd_create_and_append(Conn* c, char** argv, uint32_t argc, Command** he
     memset(cmd, 0, sizeof(Command));
 
     cmd->argc = argc;
-    cmd->argv = argv; // Assume ownership of argv
+    cmd->args = args; // Assume ownership of args
     cmd->next = NULL;
 
     if (*head == NULL) {
@@ -54,21 +60,33 @@ Command* cmd_create_and_append(Conn* c, char** argv, uint32_t argc, Command** he
     return cmd;
 }
 
+// Libera tutti gli argomenti dell'array di argomenti del comando e i suoi contenuti.
+void command_free(Command* cmd) {
+    if (cmd == NULL) return;
+
+    if (cmd->args) {
+        // 1. Libera ogni singolo buffer 'data' dentro l'array
+        for (uint32_t i = 0; i < cmd->argc; i++) {
+            if (cmd->args[i].data != NULL) {
+                free(cmd->args[i].data);
+                cmd->args[i].data = NULL; // Opzionale ma consigliato
+            }
+        }
+        // 2. Ora che l'interno è vuoto, libera l'array di struct stesso
+        free(cmd->args);
+    }
+
+    // 3. Infine libera la struttura Command stessa
+    free(cmd);
+}
+
 // Libera tutti i comandi nella lista della connessione.
 void free_command_list(Conn* c) {
     DEBUG_PRINTF("DEBUG: Freeing command list for connection %p\n", (void*)c);
     Command* cmd = c->cmd_list_head;
     while (cmd) {
         Command* next = cmd->next;
-        if (cmd->argv) {
-            for (uint32_t i = 0; i < cmd->argc; ++i) {
-                if (cmd->argv[i]) {
-                    free(cmd->argv[i]);
-                }
-            }
-            free(cmd->argv);
-        }
-        free(cmd);
+        command_free(cmd);
         cmd = next;
     }
     c->cmd_list_head = NULL;
@@ -82,15 +100,8 @@ void free_queued_command_list(Conn* c) {
     Command* cmd = c->queued_cmds_head;
     while (cmd) {
         Command* next = cmd->next;
-        if (cmd->argv) {
-            for (uint32_t i = 0; i < cmd->argc; ++i) {
-                if (cmd->argv[i]) {
-                    free(cmd->argv[i]);
-                }
-            }
-            free(cmd->argv);
-        }
-        free(cmd);
+        // Questa funzione libera TUTTO (dati binari, array args e la struct cmd)
+        command_free(cmd);
         cmd = next;
     }
     c->queued_cmds_head = NULL;
@@ -113,247 +124,243 @@ static void consume_bytes_from_buffer(Conn* c, size_t bytes) {
     DEBUG_PRINTF("DEBUG: Consumed %zu bytes from buffer for connection %p, rbuf_size: %zu\n", bytes, (void*)c, c->rbuf_size);
 }
 
+// Helper consigliato
+int arg_is(Argument* arg, const char* name) {
+    size_t name_len = strlen(name);
+    return (arg->len == name_len) && (strncasecmp(arg->data, name, name_len) == 0);
+}
+
 // Esegue un singolo comando e restituisce la sua risposta in una stringa allocata dinamicamente.
 // La stringa restituita deve essere liberata dal chiamante.
-char* get_command_reply(Conn* c, Command* cmd, HashMap* store) {
-    // Usiamo una dimensione maggiore per il buffer temporaneo per le risposte,
-    // specialmente per gestire risposte a array o stringhe bulk più lunghe.
-    // Un K_MAX_MSG * 2 dovrebbe essere sufficiente, considerando che K_MAX_MSG è 4096.
-    char reply_buf[K_MAX_MSG * 2];
+int get_command_reply(char* reply_buf, int max_len, Command* cmd, HashMap* store) {
     int len = 0;
 
-
-
-    if (cmd->argc == 0 || cmd->argv[0] == NULL) {
+    if (cmd->argc == 0 || cmd->args[0].data == NULL) {
         const char* reply_str = "OK";
-        len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+        len = snprintf(reply_buf, max_len, "+%s\r\n", reply_str);
     }
-    else if (strcasecmp(cmd->argv[0], "PING") == 0) {
-        if (cmd->argc > 1 && cmd->argv[1] != NULL) {
-            char* message = cmd->argv[1];
-            int msg_len = strlen(message);
-            len = snprintf(reply_buf, sizeof(reply_buf), "$%d\r\n%s\r\n", msg_len, message);
+    else if (arg_is(&cmd->args[0], "PING")) {
+        if (cmd->argc > 1 && cmd->args[1].data != NULL) {
+            char* message = cmd->args[1].data;
+            size_t msg_len = cmd->args[1].len;
+
+            // 1. Scriviamo il prefisso RESP (es. "$8\r\n")
+            int header_len = snprintf(reply_buf, max_len, "$%zu\r\n", msg_len);
+
+            // 2. Copiamo i dati binari "così come sono" con memcpy
+            // (Assicurati che ci sia spazio nel reply_buf!)
+            if (header_len + msg_len + 2 <= (size_t)max_len) {
+                memcpy(reply_buf + header_len, message, msg_len);
+
+                // 3. Aggiungiamo il CRLF finale richiesto dal protocollo
+                memcpy(reply_buf + header_len + msg_len, "\r\n", 2);
+
+                // Lunghezza totale effettiva della risposta
+                len = header_len + msg_len + 2;
+            }
+            else {
+                // Gestione errore buffer troppo piccolo
+            }
         }
         else {
-            const char* reply_str = "PONG";
-            len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+            // Caso PING senza argomenti -> "+PONG\r\n"
+            len = snprintf(reply_buf, max_len, "+PONG\r\n");
         }
     }
-    else if (strcasecmp(cmd->argv[0], "SET") == 0) {
+    else if (arg_is(&cmd->args[0], "SET")) {
         if (cmd->argc != 3) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'set' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'set' command\r\n");
         }
         else {
-            int set_result = store_set(store, cmd->argv[1], cmd->argv[2]);
+            int set_result = store_set(store, &cmd->args[1], &cmd->args[2]);
             if (set_result == 1 || set_result == 0) { // 1 for new key, 0 for updated key
                 const char* reply_str = "OK";
-                len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
-            } else { // -1 for OOM or type mismatch error
-                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR OOM during SET\r\n");
+                len = snprintf(reply_buf, max_len, "+%s\r\n", reply_str);
+            }
+            else { // -1 for OOM or type mismatch error
+                len = snprintf(reply_buf, max_len, "-ERR OOM during SET\r\n");
             }
         }
     }
-    else if (strcasecmp(cmd->argv[0], "GET") == 0) {
+    else if (arg_is(&cmd->args[0], "GET")) {
         if (cmd->argc != 2) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'get' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'get' command\r\n");
         }
         else {
-            char* value = store_get(store, cmd->argv[1]);
+            struct Argument* value = store_get(store, &cmd->args[1]);
             if (value) {
-                int val_len = strlen(value);
-                len = snprintf(reply_buf, sizeof(reply_buf), "$%d\r\n%s\r\n", val_len, value);
-                free(value); // Free the duplicated string from store_get
+                len = snprintf(reply_buf, max_len, "$%zu\r\n", value->len);
+                memcpy(reply_buf + len, value->data, value->len);
+                len += value->len;
+                memcpy(reply_buf + len, "\r\n", 2);
+                len += 2;
             }
             else {
                 const char* reply_str = "-1";
-                len = snprintf(reply_buf, sizeof(reply_buf), "$%s\r\n", reply_str);
+                len = snprintf(reply_buf, max_len, "$%s\r\n", reply_str);
             }
         }
     }
-    else if (strcasecmp(cmd->argv[0], "HSET") == 0) {
+    else if (arg_is(&cmd->args[0], "HSET")) {
         if (cmd->argc < 4 || (cmd->argc - 2) % 2 != 0) { // HSET key field value [field value ...] must have at least 4 args and an even number of field-value pairs
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hset' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'hset' command\r\n");
         }
         else {
             int new_fields_count = 0;
-            // Iterate through field-value pairs. Start from cmd->argv[2] as cmd->argv[0] is HSET, cmd->argv[1] is key.
+            // Iterate through field-value pairs. Start from cmd->args[2] as cmd->args[0] is HSET, cmd->args[1] is key.
             for (uint32_t i = 2; i < cmd->argc; i += 2) {
-                const char* field = cmd->argv[i];
-                const char* value = cmd->argv[i+1];
-                int hset_result = store_hset(store, cmd->argv[1], field, value);
+                int hset_result = store_hset(store, &cmd->args[1], &cmd->args[i], &cmd->args[i + 1]);
                 if (hset_result == 1) { // New field added
                     new_fields_count++;
-                } else if (hset_result == -1) { // Error during HSET (e.g., wrong type on key)
-                    len = snprintf(reply_buf, sizeof(reply_buf), "-ERR HSET failed: %s is not a hash or other error\r\n", cmd->argv[1]);
+                }
+                else if (hset_result == -1) { // Error during HSET (e.g., wrong type on key)
+                    len = snprintf(reply_buf, max_len, "-ERR HSET failed: key is not a hash or other error\r\n");
                     // Break loop and return error immediately
                     new_fields_count = -1; // Indicate error
                     break;
                 }
             }
             if (new_fields_count != -1) {
-                len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", new_fields_count);
+                len = snprintf(reply_buf, max_len, ":%d\r\n", new_fields_count);
             }
         }
     }
-    else if (strcasecmp(cmd->argv[0], "HGET") == 0) {
+    else if (arg_is(&cmd->args[0], "HGET")) {
         if (cmd->argc != 3) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hget' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'hget' command\r\n");
         }
         else {
-            char* value = store_hget(store, cmd->argv[1], cmd->argv[2]);
+            struct Argument* value = store_hget(store, &cmd->args[1], &cmd->args[2]);
             if (value) {
-                int val_len = strlen(value);
-                len = snprintf(reply_buf, sizeof(reply_buf), "$%d\r\n%s\r\n", val_len, value);
-                free(value); // Free the duplicated string from store_hget
+                len = snprintf(reply_buf, max_len, "$%zu\r\n", value->len);
+                memcpy(reply_buf + len, value->data, value->len);
+                len += value->len;
+                memcpy(reply_buf + len, "\r\n", 2);
+                len += 2;
             }
             else {
                 const char* reply_str = "-1";
-                len = snprintf(reply_buf, sizeof(reply_buf), "$%s\r\n", reply_str); // Nil bulk string
+                len = snprintf(reply_buf, max_len, "$%s\r\n", reply_str); // Nil bulk string
             }
         }
     }
-    else if (strcasecmp(cmd->argv[0], "HLEN") == 0) {
+    else if (arg_is(&cmd->args[0], "HLEN")) {
         if (cmd->argc != 2) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hlen' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'hlen' command\r\n");
         }
         else {
-            int hlen_result = store_hlen(store, cmd->argv[1]);
+            int hlen_result = store_hlen(store, &cmd->args[1]);
             // hlen_result can be >= 0 (count) or -1 (error/not hash)
             // Redis HLEN returns 0 if key does not exist or is not a hash
-            len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hlen_result);
+            len = snprintf(reply_buf, max_len, ":%d\r\n", hlen_result);
         }
     }
-    else if (strcasecmp(cmd->argv[0], "HDEL") == 0) {
+    else if (arg_is(&cmd->args[0], "HDEL")) {
         if (cmd->argc < 3) { // HDEL key field [field ...] must have at least 3 args
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hdel' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'hdel' command\r\n");
         }
         else {
-            // cmd->argv[1] is the key, cmd->argv[2] onwards are fields
-            // The fields array starts from cmd->argv[2]
+            // cmd->args[1] is the key, cmd->args[2] onwards are fields
+            // The fields array starts from cmd->args[2]
             // num_fields is cmd->argc - 2
-            int hdel_result = store_hdel(store, cmd->argv[1], (const char**)&cmd->argv[2], cmd->argc - 2);
+            int hdel_result = store_hdel(store, &cmd->args[1], &cmd->args[2], cmd->argc - 2);
             if (hdel_result >= 0) { // Number of deleted fields (can be 0)
-                len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", hdel_result);
-            } else if (hdel_result == -1) { // Wrong type
-                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
-            } else { // Other potential errors from store_hdel
-                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR HDEL failed\r\n");
+                len = snprintf(reply_buf, max_len, ":%d\r\n", hdel_result);
+            }
+            else if (hdel_result == -1) { // Wrong type
+                len = snprintf(reply_buf, max_len, "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+            }
+            else { // Other potential errors from store_hdel
+                len = snprintf(reply_buf, max_len, "-ERR HDEL failed\r\n");
             }
         }
     }
-    else if (strcasecmp(cmd->argv[0], "HGETALL") == 0) {
+    else if (arg_is(&cmd->args[0], "HGETALL")) {
         if (cmd->argc != 2) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'hgetall' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'hgetall' command\r\n");
         }
         else {
-            char** results = NULL;
+            struct Argument* results = NULL;
             size_t count = 0;
-            int hgetall_status = store_hgetall(store, cmd->argv[1], &results, &count);
+            int hgetall_status = store_hgetall(store, &cmd->args[1], &results, &count);
 
             if (hgetall_status == 0) { // Success
-                // Format as RESP array: *<num_elements>\r\n$<len1>\r\n<val1>\r\n...
-                size_t total_resp_len = 0;
-                // Calculate length needed for all elements
+                len = snprintf(reply_buf, max_len, "*%zu\r\n", count);
                 for (size_t i = 0; i < count; ++i) {
-                    total_resp_len += snprintf(NULL, 0, "$%zu\r\n%s\r\n", strlen(results[i]), results[i]);
+                    len += snprintf(reply_buf + len, max_len - len, "$%zu\r\n", results[i].len);
+                    memcpy(reply_buf + len, results[i].data, results[i].len);
+                    len += results[i].len;
+                    memcpy(reply_buf + len, "\r\n", 2);
+                    len += 2;
+                    free(results[i].data);
                 }
-                // Add length for array header (*<count>\r\n) and null terminator
-                total_resp_len += snprintf(NULL, 0, "*%zu\r\n", count);
-
-                char* resp_str = (char*)malloc(total_resp_len + 1); // +1 for null terminator
-                if (!resp_str) {
-                    len = snprintf(reply_buf, sizeof(reply_buf), "-ERR OOM during HGETALL reply construction\r\n");
-                } else {
-                    int offset = snprintf(resp_str, total_resp_len + 1, "*%zu\r\n", count);
-                    for (size_t i = 0; i < count; ++i) {
-                        offset += snprintf(resp_str + offset, total_resp_len + 1 - offset, "$%zu\r\n%s\r\n", strlen(results[i]), results[i]);
-                        free(results[i]); // Free individual string
-                    }
-                    free(results); // Free array of pointers
-                    strncpy(reply_buf, resp_str, sizeof(reply_buf) - 1);
-                    reply_buf[sizeof(reply_buf) - 1] = '\0'; // Ensure null termination
-                    len = strlen(reply_buf);
-                    free(resp_str); // Free the dynamically allocated RESP string
-                }
-            } else if (hgetall_status == -1) { // Key not found or not a hash (wrong type)
-                len = snprintf(reply_buf, sizeof(reply_buf), "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+                free(results);
+            }
+            else if (hgetall_status == -1) { // Key not found or not a hash (wrong type)
+                len = snprintf(reply_buf, max_len, "-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
             }
         }
     }
-    else if (strcasecmp(cmd->argv[0], "DEL") == 0) {
+    else if (arg_is(&cmd->args[0], "DEL")) {
         if (cmd->argc < 2) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'del' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'del' command\r\n");
         }
         else {
-            // cmd->argv[1] is the first key, cmd->argc - 1 is the number of keys
-            int deleted_count = store_del(store, (const char**)&cmd->argv[1], cmd->argc - 1);
-            len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", deleted_count);
+            // cmd->args[1] is the first key, cmd->argc - 1 is the number of keys
+            int deleted_count = store_del(store, &cmd->args[1], cmd->argc - 1);
+            len = snprintf(reply_buf, max_len, ":%d\r\n", deleted_count);
         }
     }
-    else if (strcasecmp(cmd->argv[0], "EXISTS") == 0) {
+    else if (arg_is(&cmd->args[0], "EXISTS")) {
         if (cmd->argc != 2) { // Implementing for single key EXISTS for now
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'exists' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'exists' command\r\n");
         }
         else {
-            int exists_result = store_exists(store, cmd->argv[1]);
-            len = snprintf(reply_buf, sizeof(reply_buf), ":%d\r\n", exists_result);
+            int exists_result = store_exists(store, &cmd->args[1]);
+            len = snprintf(reply_buf, max_len, ":%d\r\n", exists_result);
         }
     }
-    else if (strcasecmp(cmd->argv[0], "TYPE") == 0) {
+    else if (arg_is(&cmd->args[0], "TYPE")) {
         if (cmd->argc != 2) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'type' command\r\n");
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'type' command\r\n");
         }
         else {
-            ObjType type = store_type(store, cmd->argv[1]);
+            ObjType type = store_type(store, &cmd->args[1]);
             if (type == OBJ_STRING) {
-                len = snprintf(reply_buf, sizeof(reply_buf), "+string\r\n");
-            } else if (type == OBJ_HASH) {
-                len = snprintf(reply_buf, sizeof(reply_buf), "+hash\r\n");
-            } else { // (ObjType)-1 for not found
-                len = snprintf(reply_buf, sizeof(reply_buf), "+none\r\n");
+                len = snprintf(reply_buf, max_len, "+string\r\n");
+            }
+            else if (type == OBJ_HASH) {
+                len = snprintf(reply_buf, max_len, "+hash\r\n");
+            }
+            else { // (ObjType)-1 for not found
+                len = snprintf(reply_buf, max_len, "+none\r\n");
             }
         }
     }
-    else if (strcasecmp(cmd->argv[0], "TYPE") == 0) {
-        if (cmd->argc != 2) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'type' command\r\n");
-        }
-        else {
-            ObjType type = store_type(store, cmd->argv[1]);
-            if (type == OBJ_STRING) {
-                len = snprintf(reply_buf, sizeof(reply_buf), "+string\r\n");
-            } else if (type == OBJ_HASH) {
-                len = snprintf(reply_buf, sizeof(reply_buf), "+hash\r\n");
-            } else { // (ObjType)-1 for not found
-                len = snprintf(reply_buf, sizeof(reply_buf), "+none\r\n");
-            }
-        }
-    }
-    else if (strcasecmp(cmd->argv[0], "FLUSHDB") == 0) {
+    else if (arg_is(&cmd->args[0], "FLUSHDB")) {
         if (cmd->argc != 1) {
-            len = snprintf(reply_buf, sizeof(reply_buf), "-ERR wrong number of arguments for 'flushdb' command\r\n");
-        } else {
+            len = snprintf(reply_buf, max_len, "-ERR wrong number of arguments for 'flushdb' command\r\n");
+        }
+        else {
             store_flushdb(store);
-            len = snprintf(reply_buf, sizeof(reply_buf), "+OK\r\n");
+            len = snprintf(reply_buf, max_len, "+OK\r\n");
         }
     }
     else {
         // Unknown command
         const char* reply_str = "OK"; // Default to OK for unknown commands
-        len = snprintf(reply_buf, sizeof(reply_buf), "+%s\r\n", reply_str);
+        len = snprintf(reply_buf, max_len, "+%s\r\n", reply_str);
     }
 
-    if (len <= 0 || len >= sizeof(reply_buf)) {
+    if (len <= 0 || len >= max_len) {
         // Handle snprintf error or buffer overflow
         DEBUG_PRINTF("ERROR: snprintf failed or buffer overflow in get_command_reply.\n");
-        return strdup("-ERR Internal server error\r\n");
+        return snprintf(reply_buf, max_len, "-ERR Internal server error\r\n");
     }
 
-    // Return a dynamically allocated copy of the reply
-    return strdup(reply_buf);
+    return len;
 }
 
-// Esegue i comandi parsati e prepara le risposte.
 void execute_command(Conn* c, HashMap* store) {
     DEBUG_PRINTF("DEBUG: execute_command called for connection %p\n", (void*)c);
     while (c->cmd_list_head != NULL) {
@@ -363,121 +370,87 @@ void execute_command(Conn* c, HashMap* store) {
             c->cmd_list_tail = NULL; // List is now empty
         }
 
-
-
-        char* reply = NULL; // Dynamically allocated reply string
+        char reply_buf[K_MAX_MSG * 2];
+        int reply_len = 0;
 
         // Handle transaction commands
-        if (cmd->argc > 0 && cmd->argv[0] != NULL) {
-            if (strcasecmp(cmd->argv[0], "MULTI") == 0) {
+        if (cmd->argc > 0 && cmd->args[0].data != NULL) {
+            if (arg_is(&cmd->args[0], "MULTI")) {
                 if (c->in_transaction) {
-                    reply = strdup("-ERR MULTI already in progress\r\n");
-                } else {
-                    c->in_transaction = true;
-                    reply = strdup("+OK\r\n");
+                    reply_len = snprintf(reply_buf, sizeof(reply_buf), "-ERR MULTI already in progress\r\n");
                 }
-            } else if (strcasecmp(cmd->argv[0], "EXEC") == 0) {
+                else {
+                    c->in_transaction = true;
+                    reply_len = snprintf(reply_buf, sizeof(reply_buf), "+OK\r\n");
+                }
+            }
+            else if (arg_is(&cmd->args[0], "EXEC")) {
                 if (!c->in_transaction) {
-                    reply = strdup("-ERR EXEC without MULTI\r\n");
-                } else {
+                    reply_len = snprintf(reply_buf, sizeof(reply_buf), "-ERR EXEC without MULTI\r\n");
+                }
+                else {
                     // Execute all queued commands
                     c->in_transaction = false; // Transaction ends with EXEC
                     if (c->queued_cmds_head == NULL) {
-                        reply = strdup("*0\r\n"); // Empty array reply if no commands were queued
-                    } else {
-                        // Build array of results for EXEC
-                        // First, calculate total length needed for all replies
-                        size_t total_replies_len = 0;
-                        Command* current_queued_cmd = c->queued_cmds_head;
-                        // Temporary storage for individual replies from queued commands
-                        char* individual_replies[K_MAX_MSG]; // Max K_MAX_MSG queued commands
-                        int reply_count = 0;
-
-                        while (current_queued_cmd != NULL) {
-                            if (reply_count >= K_MAX_MSG) {
-                                DEBUG_PRINTF("WARNING: Too many queued commands, truncating EXEC response.\n");
-                                break;
-                            }
-                            // Execute the queued command and get its reply
-                            char* q_reply = get_command_reply(c, current_queued_cmd, store);
-                            if (q_reply) {
-                                individual_replies[reply_count++] = q_reply;
-                                total_replies_len += strlen(q_reply);
-                            } else {
-                                individual_replies[reply_count++] = strdup("-ERR Internal server error during EXEC\r\n");
-                                total_replies_len += strlen(individual_replies[reply_count - 1]);
-                            }
-                            current_queued_cmd = current_queued_cmd->next;
+                        reply_len = snprintf(reply_buf, sizeof(reply_buf), "*0\r\n"); // Empty array reply if no commands were queued
+                    }
+                    else {
+                        int num_queued_cmds = 0;
+                        Command* temp = c->queued_cmds_head;
+                        while(temp) {
+                            num_queued_cmds++;
+                            temp = temp->next;
                         }
 
-                        // Allocate buffer for the final EXEC array reply
-                        // Format: *<num_replies>\r\n<reply1_str><reply2_str>...
-                        // Add room for *<num_replies>\r\n and null terminator
-                        char* exec_reply_buf = (char*)malloc(total_replies_len + 32); // 32 is a generous estimate for *<num>\r\n
-                        if (!exec_reply_buf) {
-                            reply = strdup("-ERR OOM during EXEC reply construction\r\n");
-                            // Free individual replies if OOM
-                            for (int i = 0; i < reply_count; ++i) {
-                                free(individual_replies[i]);
-                            }
-                        } else {
-                            int offset = snprintf(exec_reply_buf, total_replies_len + 32, "*%d\r\n", reply_count);
-                            for (int i = 0; i < reply_count; ++i) {
-                                offset += snprintf(exec_reply_buf + offset, total_replies_len + 32 - offset, "%s", individual_replies[i]);
-                                free(individual_replies[i]); // Free individual reply
-                            }
-                            reply = exec_reply_buf;
+                        reply_len = snprintf(reply_buf, sizeof(reply_buf), "*%d\r\n", num_queued_cmds);
+                        Command* current_queued_cmd = c->queued_cmds_head;
+                        while (current_queued_cmd != NULL) {
+                            reply_len += get_command_reply(reply_buf + reply_len, sizeof(reply_buf) - reply_len, current_queued_cmd, store);
+                            current_queued_cmd = current_queued_cmd->next;
                         }
                     }
                     free_queued_command_list(c); // Clear the queued commands after EXEC
                 }
-            } else if (strcasecmp(cmd->argv[0], "DISCARD") == 0) {
+            }
+            else if (arg_is(&cmd->args[0], "DISCARD")) {
                 if (!c->in_transaction) {
-                    reply = strdup("-ERR DISCARD without MULTI\r\n");
-                } else {
+                    reply_len = snprintf(reply_buf, sizeof(reply_buf), "-ERR DISCARD without MULTI\r\n");
+                }
+                else {
                     c->in_transaction = false;
                     free_queued_command_list(c); // Discard queued commands
-                    reply = strdup("+OK\r\n");
+                    reply_len = snprintf(reply_buf, sizeof(reply_buf), "+OK\r\n");
                 }
-            } else if (c->in_transaction) {
+            }
+            else if (c->in_transaction) {
                 // If in transaction, queue the command
-                // cmd_create_and_append will take ownership of cmd->argv
-                cmd_create_and_append(c, cmd->argv, cmd->argc, &c->queued_cmds_head, &c->queued_cmds_tail);
-                // Important: clear cmd->argv from the original cmd struct
+                cmd_create_and_append(c, cmd->args, cmd->argc, &c->queued_cmds_head, &c->queued_cmds_tail);
+                // Important: clear cmd->args from the original cmd struct
                 // so it's not freed twice later.
-                cmd->argv = NULL; // Ownership transferred to queued command.
-                reply = strdup("+QUEUED\r\n");
+                cmd->args = NULL; // Ownership transferred to queued command.
+                reply_len = snprintf(reply_buf, sizeof(reply_buf), "+QUEUED\r\n");
             }
         }
 
         // If not a transaction command or not in transaction, execute normally
-        if (reply == NULL) {
-            reply = get_command_reply(c, cmd, store);
+        if (reply_len == 0) {
+            reply_len = get_command_reply(reply_buf, sizeof(reply_buf), cmd, store);
         }
 
-        if (reply) {
+        if (reply_len > 0) {
             // Append reply to write buffer
-            size_t reply_len = strlen(reply);
             if (c->wbuf_size + reply_len < sizeof(c->wbuf)) {
-                memcpy(c->wbuf + c->wbuf_size, reply, reply_len);
+                memcpy(c->wbuf + c->wbuf_size, reply_buf, reply_len);
                 c->wbuf_size += reply_len;
-            } else {
+            }
+            else {
                 DEBUG_PRINTF("ERROR: Write buffer overflow, dropping reply.\n");
                 // In a real server, would need to handle this by flushing wbuf or resizing.
             }
-            free(reply); // Free the dynamically allocated reply
         }
 
         // Free the command and its arguments (if not transferred to queued list)
-        if (cmd->argv) { // Check if ownership was transferred to queued_cmds.
-            for (uint32_t i = 0; i < cmd->argc; ++i) {
-                if (cmd->argv[i]) {
-                    free(cmd->argv[i]);
-                }
-            }
-            free(cmd->argv);
-        }
-        free(cmd);
+        command_free(cmd);
     }
 }
 
@@ -542,8 +515,8 @@ void consume_buffer(Conn* c) {
                     c->current_arg_idx = 0;
                     DEBUG_PRINTF("DEBUG: Connection %p, RESP_TYPE is '*', argc: %u\n", (void*)c, c->argc);
                     if (c->argc > 0) {
-                        c->argv = (char**)calloc(c->argc, sizeof(char*)); // calloc è più sicuro
-                        if (!c->argv) { conn_error(c, "OOM"); return; }
+                        c->args = calloc(c->argc, sizeof(Argument)); // calloc è più sicuro
+                        if (!c->args) { conn_error(c, "OOM"); return; }
                         c->parse_state = RESP_PARSE_TYPE;
                     }
                     else {
@@ -563,12 +536,16 @@ void consume_buffer(Conn* c) {
                         // Null bulk string
                         DEBUG_PRINTF("DEBUG: Connection %p, Null bulk string detected.\n", (void*)c);
                         // Null bulk string is treated as an argument
-                        if (c->argv == NULL) { // This condition should ideally not be true if we're parsing an array's argument.
+                        if (c->args == NULL) { // This condition should ideally not be true if we're parsing an array's argument.
                             conn_error(c, "Unexpected null bulk string at top-level");
                             return;
                         }
                         if (c->current_arg_idx < c->argc) {
-                            c->argv[c->current_arg_idx++] = NULL;
+                            // inizializziamo un Argument per il null bulk
+                            Argument null_bulk_arg;
+                            null_bulk_arg.len = 0;
+                            null_bulk_arg.data = NULL;
+                            c->args[c->current_arg_idx++] = null_bulk_arg;
                         }
                         else {
                             conn_error(c, "Too many arguments for command (null bulk)");
@@ -594,22 +571,22 @@ void consume_buffer(Conn* c) {
                 return; // Dati insufficienti
             }
 
-            char* arg_str = (char*)malloc(c->resp_expected_len + 1);
+            char* arg_str = (char*)malloc(c->resp_expected_len);
             if (!arg_str) { conn_error(c, "OOM"); return; }
             memcpy(arg_str, c->rbuf, c->resp_expected_len);
-            arg_str[c->resp_expected_len] = '\0';
 
-            DEBUG_PRINTF("DEBUG: Connection %p, Parsed Bulk Payload: '%s'\n", (void*)c, arg_str);
+            DEBUG_PRINTF("DEBUG: Connection %p, Parsed Bulk Payload: '%.*s'\n", (void*)c, (int)c->resp_expected_len, arg_str);
             consume_bytes_from_buffer(c, c->resp_expected_len);
             DEBUG_PRINTF("DEBUG: Connection %p, Bulk payload consumed.\n", (void*)c);
 
-            if (c->argv == NULL) { // Should have been allocated if c->argc > 0
-                conn_error(c, "Internal error: argv not allocated before bulk payload");
+            if (c->args == NULL) { // Should have been allocated if c->argc > 0
+                conn_error(c, "Internal error: args not allocated before bulk payload");
                 free(arg_str);
                 return;
             }
             if (c->current_arg_idx < c->argc) {
-                c->argv[c->current_arg_idx] = arg_str;
+                c->args[c->current_arg_idx].data = arg_str;
+                c->args[c->current_arg_idx].len = c->resp_expected_len;
             }
             else {
                 conn_error(c, "Too many arguments for command");
@@ -617,7 +594,7 @@ void consume_buffer(Conn* c) {
                 return;
             }
 
-            DEBUG_PRINTF("DEBUG: Connection %p, argv[%d] set to '%s'\n", (void*)c, c->current_arg_idx, arg_str);
+            DEBUG_PRINTF("DEBUG: Connection %p, args[%d] set to '%.*s'\n", (void*)c, c->current_arg_idx, (int)c->args[c->current_arg_idx].len, c->args[c->current_arg_idx].data);
             c->parse_state = RESP_PARSE_CRLF;
             // Fallthrough
 
@@ -647,10 +624,10 @@ void consume_buffer(Conn* c) {
         case RESP_PARSE_DONE:
             DEBUG_PRINTF("DEBUG: Connection %p, State: RESP_PARSE_DONE. Command processed.\n", (void*)c);
 
-            cmd_create_and_append(c, c->argv, c->argc, &c->cmd_list_head, &c->cmd_list_tail); // Append the parsed command to the connection's command list
+            cmd_create_and_append(c, c->args, c->argc, &c->cmd_list_head, &c->cmd_list_tail); // Append the parsed command to the connection's command list
 
             // Reset parsing-related fields for the next command
-            c->argv = NULL; // ownership transferred to Command struct
+            c->args = NULL; // ownership transferred to Command struct
             c->argc = 0;
             c->current_arg_idx = 0;
             c->parse_state = RESP_PARSE_TYPE;

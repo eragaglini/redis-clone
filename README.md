@@ -4,6 +4,7 @@ Questo è un semplice server TCP scritto in C, progettato come un clone basilare
 
 ## Caratteristiche Principali
 
+*   **Binary-Safe Protocol Implementation:** Il protocollo RESP è ora completamente binary-safe, il che significa che il server può gestire correttamente qualsiasi sequenza di byte nei valori delle chiavi e nei nomi dei campi hash, inclusi i byte nulli. Questo garantisce la compatibilità con le specifiche di Redis e permette di memorizzare dati binari arbitrari.
 *   **Implementazione Protocollo RESP (Redis Serialization Protocol):** Il server ora interpreta una versione semplificata del protocollo RESP di Redis, permettendo l'interazione con client standard (es. `redis-py`).
 *   **Supporto Comandi Basilari, Transazioni, Tipi Hash e Comandi Generici per Chiavi:** Supporto per i comandi `PING`, `SET`, `GET`, `HSET` (con campi multipli), `HGET`, `HLEN`, `HDEL` (con campi multipli), `HGETALL` e per i comandi generici per chiavi `DEL`, `EXISTS`, `TYPE` e `FLUSHDB`. Include anche le transazioni con `MULTI`/`EXEC`/`DISCARD`. La separazione tra parsing del comando e logica di esecuzione è chiara.
 *   **Pipelining Completo:** Il server gestisce correttamente il pipelining di comandi, elaborando più comandi inviati in una singola richiesta senza problemi di blocco.
